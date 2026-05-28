@@ -401,6 +401,7 @@ header h1 {
 .message-content-wrapper {
   max-width: 75%;
   min-width: 0;
+  flex: 1 1 0;
 }
 
 .message-info {
@@ -430,7 +431,8 @@ header h1 {
   border-radius: var(--radius-lg);
   line-height: 1.6;
   font-size: 0.9375rem;
-  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
   position: relative;
   transition: transform 0.15s ease;
 }
