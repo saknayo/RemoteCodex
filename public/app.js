@@ -132,7 +132,7 @@ function connectSocket() {
     const allContent = messagesContainer.querySelectorAll('.message-bubble.assistant .message-content');
     const lastContent = allContent[allContent.length - 1];
     if (lastContent) {
-      lastContent.textContent = content;
+      lastContent.innerHTML = marked.parse(content || '');
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
     isStreaming = false;
@@ -209,7 +209,7 @@ function renderMessages() {
 
     const content = document.createElement('div');
     content.className = 'message-content';
-    content.textContent = msg.content;
+    content.innerHTML = marked.parse(msg.content || '');
 
     wrapper.appendChild(content);
     bubble.appendChild(wrapper);
