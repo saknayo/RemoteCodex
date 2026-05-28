@@ -181,38 +181,34 @@ function renderMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
+    const avatarCol = document.createElement('div');
+    avatarCol.className = 'avatar-col';
+
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
     avatar.textContent = msg.role === 'user' ? 'ME' : 'AI';
-    bubble.appendChild(avatar);
+    avatarCol.appendChild(avatar);
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'message-content-wrapper';
-
-    const info = document.createElement('div');
-    info.className = 'message-info';
-
-    const sender = document.createElement('span');
+    const sender = document.createElement('div');
     sender.className = 'message-sender';
     sender.textContent = msg.role === 'user' ? '你' : 'Claude';
+    avatarCol.appendChild(sender);
 
-    const time = document.createElement('span');
+    const time = document.createElement('div');
     time.className = 'message-time';
     time.textContent = new Date(msg.timestamp).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit'
     });
+    avatarCol.appendChild(time);
 
-    info.appendChild(sender);
-    info.appendChild(time);
-    wrapper.appendChild(info);
+    bubble.appendChild(avatarCol);
 
     const content = document.createElement('div');
     content.className = 'message-content';
     content.innerHTML = marked.parse(msg.content || '');
 
-    wrapper.appendChild(content);
-    bubble.appendChild(wrapper);
+    bubble.appendChild(content);
     messagesContainer.appendChild(bubble);
   }
 
