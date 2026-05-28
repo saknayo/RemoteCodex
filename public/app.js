@@ -157,11 +157,42 @@ function renderMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
+    // 头像
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = msg.role === 'user' ? 'ME' : 'AI';
+    bubble.appendChild(avatar);
+
+    // 内容包装器
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-content-wrapper';
+
+    // 消息信息
+    const info = document.createElement('div');
+    info.className = 'message-info';
+
+    const sender = document.createElement('span');
+    sender.className = 'message-sender';
+    sender.textContent = msg.role === 'user' ? '你' : 'Claude';
+
+    const time = document.createElement('span');
+    time.className = 'message-time';
+    time.textContent = new Date(msg.timestamp).toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    info.appendChild(sender);
+    info.appendChild(time);
+    wrapper.appendChild(info);
+
+    // 消息内容
     const content = document.createElement('div');
     content.className = 'message-content';
     content.textContent = msg.content;
 
-    bubble.appendChild(content);
+    wrapper.appendChild(content);
+    bubble.appendChild(wrapper);
     messagesContainer.appendChild(bubble);
   }
 
@@ -185,11 +216,34 @@ function addTypingIndicator() {
   indicator.id = 'typing-indicator';
   indicator.className = 'message-bubble assistant';
 
+  // 头像
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.textContent = 'AI';
+  indicator.appendChild(avatar);
+
+  // 内容包装器
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message-content-wrapper';
+
+  // 消息信息
+  const info = document.createElement('div');
+  info.className = 'message-info';
+
+  const sender = document.createElement('span');
+  sender.className = 'message-sender';
+  sender.textContent = 'Claude';
+
+  info.appendChild(sender);
+  wrapper.appendChild(info);
+
+  // 输入指示器
   const content = document.createElement('div');
   content.className = 'message-content';
   content.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
 
-  indicator.appendChild(content);
+  wrapper.appendChild(content);
+  indicator.appendChild(wrapper);
   messagesContainer.appendChild(indicator);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
