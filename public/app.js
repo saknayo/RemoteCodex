@@ -3,6 +3,7 @@ let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
 let isStreaming = false;
+let streamingContentEl = null;
 
 const loginView = document.getElementById('login-view');
 const mainView = document.getElementById('main-view');
@@ -90,38 +91,59 @@ function connectSocket() {
   });
 
   socket.on('message_added', (msg) => {
-    if (currentSession) {
-      currentSession.messages.push(msg);
-      renderMessages();
-    }
-  });
-
-  socket.on('stream_chunk', (chunk) => {
-    if (currentSession && currentSession.messages.length > 0) {
-      const lastMsg = currentSession.messages[currentSession.messages.length - 1];
-      if (lastMsg.role === 'assistant') {
-        lastMsg.content += chunk;
-        appendToLastMessage(chunk);
+    console.log('[DEBUG] message_added:', msg.role, msg.content?.substring(0, 30));
+    if (!currentSession) return;
+    currentSession.messages.push(msg);
+    renderMessages();
+    if (msg.role === 'assistant' && isStreaming) {
+      const lastBubble = messagesContainer.lastElementChild;
+      console.log('[DEBUG] lastBubble:', lastBubble?.className);
+      if (lastBubble) {
+        streamingContentEl = lastBubble.querySelector('.message-content');
+        console.log('[DEBUG] streamingContentEl:', !!streamingContentEl);
       }
     }
   });
 
-  socket.on('stream_end', () => {
+  socket.on('stream_chunk', (chunk) => {
+    console.log('[DEBUG] stream_chunk:', chunk?.substring(0, 30));
+    if (!currentSession || currentSession.messages.length === 0) return;
+    const lastMsg = currentSession.messages[currentSession.messages.length - 1];
+    console.log('[DEBUG] lastMsg.role:', lastMsg.role, 'streamingContentEl:', !!streamingContentEl);
+    if (lastMsg.role !== 'assistant') return;
+    lastMsg.content += chunk;
+    if (streamingContentEl) {
+      streamingContentEl.textContent = lastMsg.content;
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  });
+
+  socket.on('stream_end', (data) => {
+    console.log('[DEBUG] stream_end, content length:', data?.content?.length);
     isStreaming = false;
+    streamingContentEl = null;
+    // 用服务端返回的完整内容更新
+    if (currentSession && currentSession.messages.length > 0) {
+      const lastMsg = currentSession.messages[currentSession.messages.length - 1];
+      if (lastMsg.role === 'assistant' && data.content) {
+        lastMsg.content = data.content;
+      }
+    }
     sendBtn.textContent = 'Send';
     sendBtn.disabled = false;
     interruptBtn.style.display = 'none';
-    removeTypingIndicator();
+    renderMessages();
     loadSessions();
   });
 
   socket.on('stream_error', (error) => {
     console.error('Stream error:', error);
     isStreaming = false;
+    streamingContentEl = null;
     sendBtn.textContent = 'Send';
     sendBtn.disabled = false;
     interruptBtn.style.display = 'none';
-    removeTypingIndicator();
+    renderMessages();
   });
 }
 
@@ -157,17 +179,14 @@ function renderMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
-    // 头像
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
     avatar.textContent = msg.role === 'user' ? 'ME' : 'AI';
     bubble.appendChild(avatar);
 
-    // 内容包装器
     const wrapper = document.createElement('div');
     wrapper.className = 'message-content-wrapper';
 
-    // 消息信息
     const info = document.createElement('div');
     info.className = 'message-info';
 
@@ -186,7 +205,6 @@ function renderMessages() {
     info.appendChild(time);
     wrapper.appendChild(info);
 
-    // 消息内容
     const content = document.createElement('div');
     content.className = 'message-content';
     content.textContent = msg.content;
@@ -196,63 +214,7 @@ function renderMessages() {
     messagesContainer.appendChild(bubble);
   }
 
-  if (isStreaming) {
-    addTypingIndicator();
-  }
-
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function appendToLastMessage(text) {
-  const lastBubble = messagesContainer.querySelector('.message-bubble.assistant:last-child .message-content');
-  if (lastBubble) {
-    lastBubble.textContent += text;
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-}
-
-function addTypingIndicator() {
-  const indicator = document.createElement('div');
-  indicator.id = 'typing-indicator';
-  indicator.className = 'message-bubble assistant';
-
-  // 头像
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.textContent = 'AI';
-  indicator.appendChild(avatar);
-
-  // 内容包装器
-  const wrapper = document.createElement('div');
-  wrapper.className = 'message-content-wrapper';
-
-  // 消息信息
-  const info = document.createElement('div');
-  info.className = 'message-info';
-
-  const sender = document.createElement('span');
-  sender.className = 'message-sender';
-  sender.textContent = 'Claude';
-
-  info.appendChild(sender);
-  wrapper.appendChild(info);
-
-  // 输入指示器
-  const content = document.createElement('div');
-  content.className = 'message-content';
-  content.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-
-  wrapper.appendChild(content);
-  indicator.appendChild(wrapper);
-  messagesContainer.appendChild(indicator);
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function removeTypingIndicator() {
-  const indicator = document.getElementById('typing-indicator');
-  if (indicator) {
-    indicator.remove();
-  }
 }
 
 async function loadSessions() {

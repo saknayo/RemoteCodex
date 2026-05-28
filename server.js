@@ -155,6 +155,7 @@ io.on('connection', (socket) => {
       timestamp: new Date().toISOString()
     };
     currentSession.messages.push(assistantMsg);
+    socket.emit('message_added', assistantMsg);
 
     try {
       const cli = spawn(CLI_PATH, ['-p', content], {
@@ -167,17 +168,20 @@ io.on('connection', (socket) => {
         const text = data.toString();
         fullResponse += text;
         assistantMsg.content = fullResponse;
+        console.log(`[DEBUG] stdout chunk: ${text.length} bytes, total: ${fullResponse.length}`);
         socket.emit('stream_chunk', text);
       });
 
       cli.stderr.on('data', (data) => {
+        console.log('[DEBUG] stderr:', data.toString());
         socket.emit('stream_error', data.toString());
       });
 
       cli.on('close', (code) => {
+        console.log(`[DEBUG] cli close, code=${code}, response length=${fullResponse.length}`);
         currentSession.updatedAt = new Date().toISOString();
         saveSession(currentSession);
-        socket.emit('stream_end', { code });
+        socket.emit('stream_end', { code, content: fullResponse });
       });
 
       activeProcesses.set(socket.id, cli);
