@@ -519,6 +519,16 @@ header {
   white-space: nowrap;
 }
 
+.message-meta-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  animation: spin 0.8s linear infinite;
+}
+
 .message-bubble.user .message-meta {
   justify-content: flex-end;
   text-align: right;
@@ -944,6 +954,12 @@ header {
   }
   30% {
     transform: translateY(-8px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

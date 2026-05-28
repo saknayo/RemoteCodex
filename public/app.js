@@ -46,7 +46,7 @@ function setMainTab(tab) {
   conversationTab.classList.toggle('active', !showSessions);
 }
 
-function createMessageMeta(senderLabel, timestamp = new Date()) {
+function createMessageMeta(senderLabel, timestamp = new Date(), options = {}) {
   const meta = document.createElement('div');
   meta.className = 'message-meta';
 
@@ -63,6 +63,14 @@ function createMessageMeta(senderLabel, timestamp = new Date()) {
 
   meta.appendChild(sender);
   meta.appendChild(time);
+
+  if (options.loading) {
+    const spinner = document.createElement('span');
+    spinner.className = 'message-meta-spinner';
+    spinner.setAttribute('aria-label', '正在思考');
+    meta.appendChild(spinner);
+  }
+
   return meta;
 }
 
@@ -155,7 +163,7 @@ function createAssistantSkeleton(msg = null) {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble assistant';
 
-  bubble.appendChild(createMessageMeta(getAssistantName(msg)));
+  bubble.appendChild(createMessageMeta(getAssistantName(msg), msg?.timestamp, { loading: true }));
 
   const body = document.createElement('div');
   body.className = 'message-body';
