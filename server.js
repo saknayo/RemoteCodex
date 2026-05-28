@@ -126,6 +126,7 @@ io.on('connection', (socket) => {
     sessionId = uuidv4();
     currentSession = {
       id: sessionId,
+      cliSessionId: uuidv4(),
       title: 'New Conversation',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -158,7 +159,11 @@ io.on('connection', (socket) => {
     socket.emit('message_added', assistantMsg);
 
     try {
-      const cli = spawn(CLI_PATH, ['-p', content], {
+      const isFirstMessage = currentSession.messages.filter(m => m.role === 'user').length <= 1;
+      const args = isFirstMessage
+        ? ['-p', content, '--session-id', currentSession.cliSessionId, '--permission-mode', 'auto']
+        : ['-p', content, '--resume', currentSession.cliSessionId, '--permission-mode', 'auto'];
+      const cli = spawn(CLI_PATH, args, {
         env: process.env
       });
 
