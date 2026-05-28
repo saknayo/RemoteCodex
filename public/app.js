@@ -25,6 +25,8 @@ const interruptBtn = document.getElementById('interrupt-btn');
 const sessionTitle = document.getElementById('session-title');
 const chatHeader = document.getElementById('chat-header');
 const toggleSidebarBtn = document.getElementById('toggle-sidebar');
+const sessionsTab = document.getElementById('sessions-tab');
+const conversationTab = document.getElementById('conversation-tab');
 const newSessionModal = document.getElementById('new-session-modal');
 const assistantSelect = document.getElementById('assistant-select');
 const sessionNameInput = document.getElementById('session-name-input');
@@ -35,6 +37,14 @@ const createSessionBtn = document.getElementById('create-session-btn');
 
 let isNavVisible = true;
 let openSessionActionItem = null;
+
+function setMainTab(tab) {
+  const showSessions = tab === 'sessions';
+  mainView.classList.toggle('show-sessions', showSessions);
+  mainView.classList.toggle('show-conversation', !showSessions);
+  sessionsTab.classList.toggle('active', showSessions);
+  conversationTab.classList.toggle('active', !showSessions);
+}
 
 function createMessageMeta(senderLabel, timestamp = new Date()) {
   const meta = document.createElement('div');
@@ -235,6 +245,7 @@ function connectSocket() {
     currentSession = session;
     renderSession();
     highlightSession(session.id);
+    setMainTab('conversation');
   });
 
   socket.on('session_created', (session) => {
@@ -242,6 +253,7 @@ function connectSocket() {
     renderSession();
     loadSessions();
     highlightSession(session.id);
+    setMainTab('conversation');
   });
 
   socket.on('session_error', (message) => {
@@ -347,6 +359,7 @@ function showLoginView() {
 function showMainView() {
   loginView.style.display = 'none';
   mainView.style.display = 'flex';
+  setMainTab('conversation');
   connectSocket();
   loadSessions();
 }
@@ -670,6 +683,14 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 
 document.getElementById('new-session-btn').addEventListener('click', () => {
   openNewSessionModal();
+});
+
+sessionsTab.addEventListener('click', () => {
+  setMainTab('sessions');
+});
+
+conversationTab.addEventListener('click', () => {
+  setMainTab('conversation');
 });
 
 closeNewSessionModalBtn.addEventListener('click', closeNewSessionModal);
