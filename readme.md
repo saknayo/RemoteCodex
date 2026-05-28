@@ -6,7 +6,7 @@ remote_codex/
 ├── AGENTS.md          # Agent 配置说明
 ├── readme.md          # 本文件
 ├── package.json       # Node.js 依赖配置
-├── server.js          # Web 服务器主程序
+├── server.js          # Web 服务器主程序（支持 Claude/Codex CLI）
 ├── .env.example       # 环境配置模板
 ├── .gitignore         # Git 忽略配置
 │
@@ -52,3 +52,10 @@ remote_codex/
 - 登录间隔：30秒
 - 失败封禁：3次失败封禁IP 30分钟
 - 速率限制：10次/分钟
+
+**CLI 配置：**
+- 默认使用 Claude CLI：`CLI_PROVIDER=claude`
+- 使用 Codex CLI：`CLI_PROVIDER=codex`
+- Claude 路径：`CLAUDE_CLI_PATH=/path/to/claude`
+- Codex 路径：`CODEX_CLI_PATH=/path/to/codex`
+- 旧的 `CLI_PATH` 仍可作为 Claude 路径兼容配置

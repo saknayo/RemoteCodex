@@ -19,7 +19,22 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
-const CLI_PATH = process.env.CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/claude';
+const CLI_PROVIDER = (process.env.CLI_PROVIDER || 'claude').toLowerCase();
+const CLAUDE_CLI_PATH = process.env.CLAUDE_CLI_PATH || process.env.CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/claude';
+const CODEX_CLI_PATH = process.env.CODEX_CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/codex';
+
+const PROVIDERS = {
+  claude: {
+    id: 'claude',
+    assistantName: 'Claude',
+    path: CLAUDE_CLI_PATH
+  },
+  codex: {
+    id: 'codex',
+    assistantName: 'Codex',
+    path: CODEX_CLI_PATH
+  }
+};
 
 if (!fs.existsSync(SESSIONS_DIR)) {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -51,6 +66,25 @@ function saveSession(session) {
   fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2));
 }
 
+function getProvider(id = CLI_PROVIDER) {
+  return PROVIDERS[id] || PROVIDERS.claude;
+}
+
+function buildCliCommand(provider, session, content, isFirstMessage) {
+  if (provider.id === 'codex') {
+    const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access'];
+    if (isFirstMessage || !session.cliSessionId) {
+      return { command: provider.path, args: [...baseArgs, content] };
+    }
+    return { command: provider.path, args: ['exec', 'resume', '--json', session.cliSessionId, content] };
+  }
+
+  const args = isFirstMessage
+    ? ['-p', content, '--session-id', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+    : ['-p', content, '--resume', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+  return { command: provider.path, args };
+}
+
 app.get('/api/sessions', verifyToken, requireAuth, (req, res) => {
   const sessions = [];
 
@@ -60,6 +94,8 @@ app.get('/api/sessions', verifyToken, requireAuth, (req, res) => {
       sessions.push({
         id: data.id,
         title: data.title || 'Untitled',
+        provider: data.provider || 'claude',
+        assistantName: data.assistantName || getProvider(data.provider).assistantName,
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       });
@@ -123,10 +159,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('new_session', () => {
+    const provider = getProvider();
     sessionId = uuidv4();
     currentSession = {
       id: sessionId,
       cliSessionId: uuidv4(),
+      provider: provider.id,
+      assistantName: provider.assistantName,
       title: 'New Conversation',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -138,6 +177,10 @@ io.on('connection', (socket) => {
 
   socket.on('send_message', async (content) => {
     if (!currentSession) return;
+    currentSession.provider = currentSession.provider || 'claude';
+    currentSession.assistantName = getProvider(currentSession.provider).assistantName;
+    currentSession.cliSessionId = currentSession.cliSessionId || uuidv4();
+    const provider = getProvider(currentSession.provider);
 
     const userMsg = { role: 'user', content, timestamp: new Date().toISOString() };
     currentSession.messages.push(userMsg);
@@ -156,6 +199,7 @@ io.on('connection', (socket) => {
       thinking: '',
       toolUses: [],
       durationMs: null,
+      assistantName: currentSession.assistantName,
       timestamp: new Date().toISOString()
     };
     currentSession.messages.push(assistantMsg);
@@ -163,11 +207,10 @@ io.on('connection', (socket) => {
 
     try {
       const isFirstMessage = currentSession.messages.filter(m => m.role === 'user').length <= 1;
-      const args = isFirstMessage
-        ? ['-p', content, '--session-id', currentSession.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
-        : ['-p', content, '--resume', currentSession.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
-      const cli = spawn(CLI_PATH, args, {
-        env: process.env
+      const { command, args } = buildCliCommand(provider, currentSession, content, isFirstMessage);
+      const cli = spawn(command, args, {
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe']
       });
 
       let fullResponse = '';
@@ -196,6 +239,45 @@ io.on('connection', (socket) => {
       });
 
       function handleStreamEvent(event) {
+        if (provider.id === 'codex') {
+          handleCodexEvent(event);
+          return;
+        }
+        handleClaudeEvent(event);
+      }
+
+      function handleCodexEvent(event) {
+        if (event.type === 'thread.started' && event.thread_id) {
+          currentSession.cliSessionId = event.thread_id;
+          return;
+        }
+
+        if (event.type === 'item.completed' && event.item) {
+          const item = event.item;
+          if (item.type === 'agent_message' && item.text) {
+            resultText = item.text;
+            fullResponse = item.text;
+          } else if (item.type === 'command_execution') {
+            const tool = {
+              name: 'Bash',
+              input: { command: item.command || '' },
+              result: (item.aggregated_output || '').substring(0, 2000)
+            };
+            assistantMsg.toolUses.push(tool);
+            socket.emit('stream_tool_use', { name: tool.name, input: tool.input });
+            socket.emit('stream_tool_result', { result: tool.result || '(no output)', isError: item.exit_code !== 0 });
+          } else if (item.type && item.type !== 'error') {
+            const tool = {
+              name: item.type,
+              input: item.command ? { command: item.command } : item
+            };
+            assistantMsg.toolUses.push(tool);
+            socket.emit('stream_tool_use', { name: tool.name, input: tool.input });
+          }
+        }
+      }
+
+      function handleClaudeEvent(event) {
         // 捕获 result 事件（最终完整文本）
         if (event.type === 'result' && event.result) {
           resultText = event.result;
@@ -278,7 +360,8 @@ io.on('connection', (socket) => {
           content: assistantMsg.content,
           thinking: assistantMsg.thinking,
           toolUses: assistantMsg.toolUses,
-          durationMs: assistantMsg.durationMs
+          durationMs: assistantMsg.durationMs,
+          assistantName: assistantMsg.assistantName
         });
       });
 
@@ -307,6 +390,7 @@ io.on('connection', (socket) => {
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+  console.log(`CLI provider: ${getProvider().id}`);
   console.log(`Default user: ${process.env.ADMIN_USERNAME || 'admin'}`);
   console.log(`Please set ADMIN_USERNAME and ADMIN_PASSWORD in .env file`);
 });

@@ -29,13 +29,13 @@ const toggleSidebarBtn = document.getElementById('toggle-sidebar');
 let isNavVisible = true;
 let openSessionActionItem = null;
 
-function createMessageMeta(role, timestamp = new Date()) {
+function createMessageMeta(senderLabel, timestamp = new Date()) {
   const meta = document.createElement('div');
   meta.className = 'message-meta';
 
   const sender = document.createElement('span');
   sender.className = 'message-sender';
-  sender.textContent = role === 'user' ? '你' : 'Claude';
+  sender.textContent = senderLabel === 'user' ? '你' : senderLabel;
 
   const time = document.createElement('span');
   time.className = 'message-time';
@@ -47,6 +47,10 @@ function createMessageMeta(role, timestamp = new Date()) {
   meta.appendChild(sender);
   meta.appendChild(time);
   return meta;
+}
+
+function getAssistantName(msg = currentSession) {
+  return msg?.assistantName || currentSession?.assistantName || 'Claude';
 }
 
 function formatDuration(durationMs) {
@@ -110,11 +114,11 @@ function scrollToBottom() {
 }
 
 // 创建 assistant 气泡的骨架（thinking + toolUse + content 区域）
-function createAssistantSkeleton() {
+function createAssistantSkeleton(msg = null) {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble assistant';
 
-  bubble.appendChild(createMessageMeta('assistant'));
+  bubble.appendChild(createMessageMeta(getAssistantName(msg)));
 
   const body = document.createElement('div');
   body.className = 'message-body';
@@ -222,7 +226,7 @@ function connectSocket() {
     }
     // assistant 空消息：创建流式骨架
     if (msg.role === 'assistant' && isStreaming) {
-      createAssistantSkeleton();
+      createAssistantSkeleton(msg);
       hasThinking = false;
     }
   });
@@ -277,6 +281,7 @@ function connectSocket() {
         lastMsg.thinking = data.thinking || '';
         lastMsg.toolUses = data.toolUses || [];
         lastMsg.durationMs = data.durationMs ?? null;
+        lastMsg.assistantName = data.assistantName || lastMsg.assistantName || currentSession.assistantName || 'Claude';
       }
     }
     // 清理流式状态
@@ -334,7 +339,7 @@ function renderMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
-    bubble.appendChild(createMessageMeta(msg.role, msg.timestamp));
+    bubble.appendChild(createMessageMeta(msg.role === 'user' ? 'user' : getAssistantName(msg), msg.timestamp));
 
     if (msg.role === 'assistant') {
       const body = document.createElement('div');
