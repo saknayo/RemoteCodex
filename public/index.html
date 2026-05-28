@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Remote Codex</title>
-  <link rel="stylesheet" href="/style.css?v=42">
+  <link rel="stylesheet" href="/style.css?v=46">
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -45,7 +45,7 @@
 
         <main class="chat-area">
           <div id="chat-header" class="chat-header">
-            <button id="toggle-sidebar" class="icon-btn" style="padding: 0.5rem; margin-right: 0.5rem; display: none;">☰</button>
+            <button id="toggle-sidebar" class="icon-btn" aria-pressed="false" aria-label="Toggle navigation">◀</button>
             <h2 id="session-title">Select or create a session</h2>
           </div>
           <div id="messages" class="messages"></div>
@@ -61,6 +61,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=42"></script>
+  <script src="/app.js?v=46"></script>
 </body>
 </html>

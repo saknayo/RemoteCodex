@@ -237,6 +237,11 @@ header h1 {
   color: var(--text-primary);
 }
 
+#main-view.nav-collapsed > header,
+#main-view.nav-collapsed .sidebar {
+  display: none;
+}
+
 /* === Container === */
 .container {
   display: flex;
@@ -290,10 +295,15 @@ header h1 {
 }
 
 .session-item {
-  padding: var(--spacing-md) var(--spacing-lg);
+  height: 36px;
+  padding: 0 var(--spacing-lg);
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: background 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .session-item:hover {
@@ -312,12 +322,20 @@ header h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-primary);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .session-item-date {
   font-size: 0.75rem;
   color: var(--text-muted);
-  margin-top: 2px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.session-item-separator {
+  color: var(--border);
+  flex: 0 0 auto;
 }
 
 /* === Chat Area === */
@@ -332,22 +350,36 @@ header h1 {
 }
 
 .chat-header {
-  flex: 0 0 56px;
-  padding: var(--spacing-md) var(--spacing-lg);
+  flex: 0 0 36px;
+  padding: 0 var(--spacing-md);
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .chat-header h2 {
-  font-size: 1rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+#toggle-sidebar {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0 !important;
+  margin-right: 4px !important;
+  font-size: 0.75rem;
+  line-height: 1;
 }
 
 /* === Messages === */
@@ -865,16 +897,8 @@ header h1 {
     border-bottom: 1px solid var(--border);
   }
 
-  .sidebar.collapsed {
-    display: none;
-  }
-
-  .chat-header {
-    padding: var(--spacing-sm) var(--spacing-md);
-  }
-
   .chat-header h2 {
-    font-size: 0.9375rem;
+    font-size: 0.8125rem;
   }
 
   .messages {
@@ -914,7 +938,7 @@ header h1 {
   }
 
   .session-item {
-    padding: var(--spacing-sm) var(--spacing-md);
+    padding: 0 var(--spacing-md);
   }
 
   .icon-btn {

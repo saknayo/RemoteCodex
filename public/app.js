@@ -23,10 +23,10 @@ const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const interruptBtn = document.getElementById('interrupt-btn');
 const sessionTitle = document.getElementById('session-title');
-const sidebar = document.getElementById('sidebar');
+const chatHeader = document.getElementById('chat-header');
 const toggleSidebarBtn = document.getElementById('toggle-sidebar');
 
-let isSidebarVisible = true;
+let isNavVisible = true;
 
 function showMessage(message, type = 'info') {
   loginMessage.textContent = message;
@@ -399,16 +399,26 @@ function renderSessionList(sessions) {
     li.className = 'session-item';
     li.dataset.id = session.id;
 
-    const title = document.createElement('div');
+    const date = document.createElement('span');
+    date.className = 'session-item-date';
+    date.textContent = new Date(session.updatedAt).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const separator = document.createElement('span');
+    separator.className = 'session-item-separator';
+    separator.textContent = '|';
+
+    const title = document.createElement('span');
     title.className = 'session-item-title';
     title.textContent = session.title || 'Untitled';
 
-    const date = document.createElement('div');
-    date.className = 'session-item-date';
-    date.textContent = new Date(session.updatedAt).toLocaleString();
-
-    li.appendChild(title);
     li.appendChild(date);
+    li.appendChild(separator);
+    li.appendChild(title);
 
     li.addEventListener('click', () => {
       if (socket && currentSession?.id !== session.id) {
@@ -500,9 +510,11 @@ document.getElementById('new-session-btn').addEventListener('click', () => {
   }
 });
 
-toggleSidebarBtn.addEventListener('click', () => {
-  isSidebarVisible = !isSidebarVisible;
-  sidebar.style.display = isSidebarVisible ? 'flex' : 'none';
+chatHeader.addEventListener('click', () => {
+  isNavVisible = !isNavVisible;
+  mainView.classList.toggle('nav-collapsed', !isNavVisible);
+  toggleSidebarBtn.setAttribute('aria-pressed', String(!isNavVisible));
+  toggleSidebarBtn.textContent = isNavVisible ? '◀' : '▶';
 });
 
 sendBtn.addEventListener('click', () => {
