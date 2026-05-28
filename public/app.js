@@ -123,6 +123,46 @@ function createAssistantSkeleton() {
   streamingBubble = bubble;
 }
 
+function createToolUseItem(tool) {
+  const item = document.createElement('div');
+  item.className = 'tool-use-item collapsed';
+
+  const header = document.createElement('div');
+  header.className = 'tool-use-header';
+  const icon = tool.name === 'Bash' ? '⚡' : '🔧';
+  header.textContent = `${icon} ${tool.name}`;
+  header.addEventListener('click', () => {
+    item.classList.toggle('collapsed');
+  });
+  item.appendChild(header);
+
+  if (tool.name === 'Bash' && tool.input.command) {
+    const code = document.createElement('pre');
+    code.className = 'tool-use-code';
+    code.textContent = tool.input.command;
+    item.appendChild(code);
+  } else if (tool.input.file_path) {
+    const path = document.createElement('div');
+    path.className = 'tool-use-path';
+    path.textContent = tool.input.file_path;
+    item.appendChild(path);
+  } else {
+    const desc = document.createElement('div');
+    desc.className = 'tool-use-path';
+    desc.textContent = JSON.stringify(tool.input).substring(0, 200);
+    item.appendChild(desc);
+  }
+
+  if (tool.result) {
+    const resultEl = document.createElement('pre');
+    resultEl.className = 'tool-result-code';
+    resultEl.textContent = tool.result;
+    item.appendChild(resultEl);
+  }
+
+  return item;
+}
+
 function connectSocket() {
   if (socket) {
     socket.disconnect();
@@ -185,37 +225,7 @@ function connectSocket() {
   socket.on('stream_tool_use', (tool) => {
     if (!toolUseEl) return;
     toolUseEl.style.display = 'block';
-    const item = document.createElement('div');
-    item.className = 'tool-use-item';
-
-    const header = document.createElement('div');
-    header.className = 'tool-use-header';
-    const icon = tool.name === 'Bash' ? '⚡' : '🔧';
-    header.textContent = `${icon} ${tool.name}`;
-    item.appendChild(header);
-
-    if (tool.name === 'Bash' && tool.input.command) {
-      const code = document.createElement('pre');
-      code.className = 'tool-use-code';
-      code.textContent = tool.input.command;
-      item.appendChild(code);
-    } else if (tool.name === 'Read' && tool.input.file_path) {
-      const path = document.createElement('div');
-      path.className = 'tool-use-path';
-      path.textContent = tool.input.file_path;
-      item.appendChild(path);
-    } else if (tool.name === 'Edit' || tool.name === 'Write') {
-      const path = document.createElement('div');
-      path.className = 'tool-use-path';
-      path.textContent = tool.input.file_path || '';
-      item.appendChild(path);
-    } else {
-      const desc = document.createElement('div');
-      desc.className = 'tool-use-path';
-      desc.textContent = JSON.stringify(tool.input).substring(0, 200);
-      item.appendChild(desc);
-    }
-
+    const item = createToolUseItem(tool);
     toolUseEl.appendChild(item);
     scrollToBottom();
   });
@@ -340,36 +350,7 @@ function renderMessages() {
         const toolArea = document.createElement('div');
         toolArea.className = 'tool-use-area';
         for (const tool of msg.toolUses) {
-          const item = document.createElement('div');
-          item.className = 'tool-use-item';
-          const header = document.createElement('div');
-          header.className = 'tool-use-header';
-          const icon = tool.name === 'Bash' ? '⚡' : '🔧';
-          header.textContent = `${icon} ${tool.name}`;
-          item.appendChild(header);
-          if (tool.name === 'Bash' && tool.input.command) {
-            const code = document.createElement('pre');
-            code.className = 'tool-use-code';
-            code.textContent = tool.input.command;
-            item.appendChild(code);
-          } else if (tool.input.file_path) {
-            const p = document.createElement('div');
-            p.className = 'tool-use-path';
-            p.textContent = tool.input.file_path;
-            item.appendChild(p);
-          } else {
-            const p = document.createElement('div');
-            p.className = 'tool-use-path';
-            p.textContent = JSON.stringify(tool.input).substring(0, 200);
-            item.appendChild(p);
-          }
-          // 工具结果
-          if (tool.result) {
-            const resultEl = document.createElement('pre');
-            resultEl.className = 'tool-result-code';
-            resultEl.textContent = tool.result;
-            item.appendChild(resultEl);
-          }
+          const item = createToolUseItem(tool);
           toolArea.appendChild(item);
         }
         body.appendChild(toolArea);

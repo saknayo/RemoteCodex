@@ -534,6 +534,26 @@ header h1 {
   color: var(--text-secondary);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-use-header::before {
+  content: '▼ ';
+}
+
+.tool-use-item.collapsed .tool-use-header {
+  border-bottom: none;
+}
+
+.tool-use-item.collapsed .tool-use-header::before {
+  content: '▶ ';
+}
+
+.tool-use-item.collapsed .tool-use-code,
+.tool-use-item.collapsed .tool-use-path,
+.tool-use-item.collapsed .tool-result-code {
+  display: none;
 }
 
 .tool-use-code {
