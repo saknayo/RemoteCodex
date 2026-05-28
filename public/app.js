@@ -725,7 +725,7 @@ chatHeader.addEventListener('click', () => {
   isNavVisible = !isNavVisible;
   mainView.classList.toggle('nav-collapsed', !isNavVisible);
   toggleSidebarBtn.setAttribute('aria-pressed', String(!isNavVisible));
-  toggleSidebarBtn.textContent = isNavVisible ? '◀' : '▶';
+  toggleSidebarBtn.textContent = isNavVisible ? '⛶' : '↙';
 });
 
 sendBtn.addEventListener('click', () => {
