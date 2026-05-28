@@ -32,7 +32,7 @@ remote_codex/
 │
 ├── sessions/          # 会话存储目录（运行时生成）
 │
-└── disscuss/          # 方案讨论归档目录
+└── discuss/           # 方案讨论归档目录
     └── readme.md      # 归档使用说明
 ```
 
