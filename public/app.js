@@ -19,6 +19,7 @@ const loginBtn = document.getElementById('login-btn');
 
 const sessionList = document.getElementById('session-list');
 const messagesContainer = document.getElementById('messages');
+const selectSessionBtn = document.getElementById('select-session-btn');
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const interruptBtn = document.getElementById('interrupt-btn');
@@ -374,11 +375,24 @@ function showMainView() {
 
 function renderSession() {
   if (!currentSession) {
+    mainView.classList.add('no-session');
     sessionTitle.textContent = 'Select or create a session';
+    sessionTitle.removeAttribute('title');
     messagesContainer.innerHTML = '';
+    const emptyState = document.createElement('div');
+    emptyState.id = 'conversation-empty-state';
+    emptyState.className = 'conversation-empty-state';
+    const selectButton = document.createElement('button');
+    selectButton.id = 'select-session-btn';
+    selectButton.type = 'button';
+    selectButton.textContent = 'Select Session';
+    selectButton.addEventListener('click', () => setMainTab('sessions'));
+    emptyState.appendChild(selectButton);
+    messagesContainer.appendChild(emptyState);
     return;
   }
 
+  mainView.classList.remove('no-session');
   sessionTitle.textContent = currentSession.title || 'Untitled';
   sessionTitle.title = `${currentSession.assistantName || 'Claude'} · ${currentSession.projectDir || ''}`;
   renderMessages();
@@ -699,6 +713,10 @@ sessionsTab.addEventListener('click', () => {
 
 conversationTab.addEventListener('click', () => {
   setMainTab('conversation');
+});
+
+selectSessionBtn.addEventListener('click', () => {
+  setMainTab('sessions');
 });
 
 closeNewSessionModalBtn.addEventListener('click', closeNewSessionModal);

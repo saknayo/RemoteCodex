@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Remote Codex</title>
-  <link rel="stylesheet" href="/style.css?v=61">
+  <link rel="stylesheet" href="/style.css?v=62">
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -28,7 +28,7 @@
       </div>
     </div>
 
-    <div id="main-view" class="view" style="display: none;">
+    <div id="main-view" class="view no-session" style="display: none;">
       <header>
         <div class="nav-tabs" role="tablist" aria-label="Main views">
           <button id="sessions-tab" class="nav-tab active" type="button">Sessions</button>
@@ -51,7 +51,11 @@
             <button id="toggle-sidebar" class="icon-btn" aria-pressed="false" aria-label="Toggle fullscreen">⛶</button>
             <h2 id="session-title">Select or create a session</h2>
           </div>
-          <div id="messages" class="messages"></div>
+          <div id="messages" class="messages">
+            <div id="conversation-empty-state" class="conversation-empty-state">
+              <button id="select-session-btn" type="button">Select Session</button>
+            </div>
+          </div>
           <div class="input-area">
             <textarea id="message-input" placeholder="Type your message..." rows="1"></textarea>
             <div class="input-actions">
@@ -92,6 +96,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=61"></script>
+  <script src="/app.js?v=62"></script>
 </body>
 </html>
