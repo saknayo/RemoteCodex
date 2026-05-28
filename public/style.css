@@ -577,14 +577,12 @@ header {
 .message-bubble.user .message-content {
   background: var(--bubble-user);
   color: var(--bubble-user-text);
-  border-bottom-right-radius: 4px;
 }
 
 .message-bubble.assistant .message-content {
   background: var(--bubble-assistant);
   color: var(--bubble-assistant-text);
   border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
 }
 
 .message-body {

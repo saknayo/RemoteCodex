@@ -185,6 +185,7 @@ function createAssistantSkeleton(msg = null) {
   // 文本内容区域
   textContentEl = document.createElement('div');
   textContentEl.className = 'message-content';
+  textContentEl.style.display = 'none';
   body.appendChild(textContentEl);
 
   bubble.appendChild(body);
@@ -320,6 +321,7 @@ function connectSocket() {
 
   socket.on('stream_text', (text) => {
     if (!textContentEl) return;
+    textContentEl.style.display = 'block';
     textContentEl.textContent += text;
     scrollToBottom();
   });
