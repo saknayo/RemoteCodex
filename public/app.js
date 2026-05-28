@@ -29,6 +29,45 @@ const toggleSidebarBtn = document.getElementById('toggle-sidebar');
 let isNavVisible = true;
 let openSessionActionItem = null;
 
+function createMessageMeta(role, timestamp = new Date()) {
+  const meta = document.createElement('div');
+  meta.className = 'message-meta';
+
+  const sender = document.createElement('span');
+  sender.className = 'message-sender';
+  sender.textContent = role === 'user' ? '你' : 'Claude';
+
+  const time = document.createElement('span');
+  time.className = 'message-time';
+  time.textContent = new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  meta.appendChild(sender);
+  meta.appendChild(time);
+  return meta;
+}
+
+function formatDuration(durationMs) {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
+    return '';
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function createDurationEl(durationMs) {
+  const durationText = formatDuration(durationMs);
+  if (!durationText) return null;
+  const duration = document.createElement('div');
+  duration.className = 'message-duration';
+  duration.textContent = `耗时 ${durationText}`;
+  return duration;
+}
+
 function showMessage(message, type = 'info') {
   loginMessage.textContent = message;
   loginMessage.className = `message ${type}`;
@@ -75,28 +114,7 @@ function createAssistantSkeleton() {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble assistant';
 
-  const avatarCol = document.createElement('div');
-  avatarCol.className = 'avatar-col';
-
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.textContent = 'AI';
-  avatarCol.appendChild(avatar);
-
-  const sender = document.createElement('div');
-  sender.className = 'message-sender';
-  sender.textContent = 'Claude';
-  avatarCol.appendChild(sender);
-
-  const time = document.createElement('div');
-  time.className = 'message-time';
-  time.textContent = new Date().toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-  avatarCol.appendChild(time);
-
-  bubble.appendChild(avatarCol);
+  bubble.appendChild(createMessageMeta('assistant'));
 
   const body = document.createElement('div');
   body.className = 'message-body';
@@ -258,6 +276,7 @@ function connectSocket() {
         lastMsg.content = content;
         lastMsg.thinking = data.thinking || '';
         lastMsg.toolUses = data.toolUses || [];
+        lastMsg.durationMs = data.durationMs ?? null;
       }
     }
     // 清理流式状态
@@ -315,28 +334,7 @@ function renderMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
-    const avatarCol = document.createElement('div');
-    avatarCol.className = 'avatar-col';
-
-    const avatar = document.createElement('div');
-    avatar.className = 'message-avatar';
-    avatar.textContent = msg.role === 'user' ? 'ME' : 'AI';
-    avatarCol.appendChild(avatar);
-
-    const sender = document.createElement('div');
-    sender.className = 'message-sender';
-    sender.textContent = msg.role === 'user' ? '你' : 'Claude';
-    avatarCol.appendChild(sender);
-
-    const time = document.createElement('div');
-    time.className = 'message-time';
-    time.textContent = new Date(msg.timestamp).toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-    avatarCol.appendChild(time);
-
-    bubble.appendChild(avatarCol);
+    bubble.appendChild(createMessageMeta(msg.role, msg.timestamp));
 
     if (msg.role === 'assistant') {
       const body = document.createElement('div');
@@ -366,6 +364,11 @@ function renderMessages() {
       content.className = 'message-content';
       content.innerHTML = marked.parse(msg.content || '');
       body.appendChild(content);
+
+      const duration = createDurationEl(msg.durationMs);
+      if (duration) {
+        body.appendChild(duration);
+      }
 
       bubble.appendChild(body);
     } else {

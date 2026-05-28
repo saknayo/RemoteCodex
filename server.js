@@ -155,6 +155,7 @@ io.on('connection', (socket) => {
       content: '',
       thinking: '',
       toolUses: [],
+      durationMs: null,
       timestamp: new Date().toISOString()
     };
     currentSession.messages.push(assistantMsg);
@@ -175,6 +176,8 @@ io.on('connection', (socket) => {
       let currentTool = null;
       let toolInput = '';
       let resultText = '';
+      let resultDurationMs = null;
+      const requestStartedAt = Date.now();
 
       cli.stdout.on('data', (data) => {
         buffer += data.toString();
@@ -196,6 +199,11 @@ io.on('connection', (socket) => {
         // 捕获 result 事件（最终完整文本）
         if (event.type === 'result' && event.result) {
           resultText = event.result;
+          if (typeof event.duration_ms === 'number') {
+            resultDurationMs = event.duration_ms;
+          } else if (typeof event.durationMs === 'number') {
+            resultDurationMs = event.durationMs;
+          }
           return;
         }
         // 捕获工具执行结果
@@ -262,13 +270,15 @@ io.on('connection', (socket) => {
       cli.on('close', (code) => {
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         assistantMsg.content = resultText || fullResponse;
+        assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
         currentSession.updatedAt = new Date().toISOString();
         saveSession(currentSession);
         socket.emit('stream_end', {
           code,
           content: assistantMsg.content,
           thinking: assistantMsg.thinking,
-          toolUses: assistantMsg.toolUses
+          toolUses: assistantMsg.toolUses,
+          durationMs: assistantMsg.durationMs
         });
       });
 
