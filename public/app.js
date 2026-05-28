@@ -119,31 +119,33 @@ function connectSocket() {
   });
 
   socket.on('stream_end', (data) => {
-    console.log('[DEBUG] stream_end, content length:', data?.content?.length);
-    isStreaming = false;
     streamingContentEl = null;
-    // 用服务端返回的完整内容更新
+    const content = data?.content || '';
+    // 更新数据
     if (currentSession && currentSession.messages.length > 0) {
       const lastMsg = currentSession.messages[currentSession.messages.length - 1];
-      if (lastMsg.role === 'assistant' && data.content) {
-        lastMsg.content = data.content;
+      if (lastMsg.role === 'assistant') {
+        lastMsg.content = content;
       }
     }
+    // 直接更新最后一个 assistant 气泡的 DOM，避免重建全部
+    const allContent = messagesContainer.querySelectorAll('.message-bubble.assistant .message-content');
+    const lastContent = allContent[allContent.length - 1];
+    if (lastContent) {
+      lastContent.textContent = content;
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    isStreaming = false;
     sendBtn.textContent = 'Send';
     sendBtn.disabled = false;
     interruptBtn.style.display = 'none';
-    renderMessages();
     loadSessions();
   });
 
   socket.on('stream_error', (error) => {
-    console.error('Stream error:', error);
-    isStreaming = false;
-    streamingContentEl = null;
-    sendBtn.textContent = 'Send';
-    sendBtn.disabled = false;
-    interruptBtn.style.display = 'none';
-    renderMessages();
+    console.error('Stream stderr:', error);
+    // stderr 只是警告（如 stdin 提示），不终止流式传输
+    // 真正的错误由 stream_end(code) 处理
   });
 }
 
