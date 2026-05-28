@@ -27,6 +27,7 @@ const chatHeader = document.getElementById('chat-header');
 const toggleSidebarBtn = document.getElementById('toggle-sidebar');
 
 let isNavVisible = true;
+let openSessionActionItem = null;
 
 function showMessage(message, type = 'info') {
   loginMessage.textContent = message;
@@ -295,7 +296,11 @@ function showMainView() {
 }
 
 function renderSession() {
-  if (!currentSession) return;
+  if (!currentSession) {
+    sessionTitle.textContent = 'Select or create a session';
+    messagesContainer.innerHTML = '';
+    return;
+  }
 
   sessionTitle.textContent = currentSession.title || 'Untitled';
   renderMessages();
@@ -393,11 +398,15 @@ async function loadSessions() {
 
 function renderSessionList(sessions) {
   sessionList.innerHTML = '';
+  openSessionActionItem = null;
 
   for (const session of sessions) {
     const li = document.createElement('li');
     li.className = 'session-item';
     li.dataset.id = session.id;
+
+    const content = document.createElement('div');
+    content.className = 'session-item-content';
 
     const date = document.createElement('span');
     date.className = 'session-item-date';
@@ -416,11 +425,125 @@ function renderSessionList(sessions) {
     title.className = 'session-item-title';
     title.textContent = session.title || 'Untitled';
 
-    li.appendChild(date);
-    li.appendChild(separator);
-    li.appendChild(title);
+    content.appendChild(date);
+    content.appendChild(separator);
+    content.appendChild(title);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'session-delete-btn';
+    deleteBtn.textContent = '删除';
+
+    li.appendChild(deleteBtn);
+    li.appendChild(content);
+
+    let startX = 0;
+    let startY = 0;
+    let swipeStarted = false;
+    let didSwipe = false;
+
+    const closeItem = () => {
+      li.classList.remove('show-delete');
+      if (openSessionActionItem === li) {
+        openSessionActionItem = null;
+      }
+    };
+
+    const openItem = () => {
+      if (openSessionActionItem && openSessionActionItem !== li) {
+        openSessionActionItem.classList.remove('show-delete');
+      }
+      li.classList.add('show-delete');
+      openSessionActionItem = li;
+    };
+
+    li.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+      swipeStarted = true;
+      didSwipe = false;
+    }, { passive: true });
+
+    li.addEventListener('touchmove', (e) => {
+      if (!swipeStarted) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = touch.clientY - startY;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) return;
+      if (deltaX < -30) {
+        openItem();
+        didSwipe = true;
+      } else if (deltaX > 30) {
+        closeItem();
+        didSwipe = true;
+      }
+    }, { passive: true });
+
+    li.addEventListener('touchend', () => {
+      swipeStarted = false;
+      setTimeout(() => {
+        didSwipe = false;
+      }, 250);
+    });
+
+    li.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      swipeStarted = true;
+      didSwipe = false;
+    });
+
+    li.addEventListener('pointermove', (e) => {
+      if (!swipeStarted || e.pointerType === 'touch') return;
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) return;
+      if (deltaX < -30) {
+        openItem();
+        didSwipe = true;
+      } else if (deltaX > 30) {
+        closeItem();
+        didSwipe = true;
+      }
+    });
+
+    li.addEventListener('pointerup', () => {
+      swipeStarted = false;
+      setTimeout(() => {
+        didSwipe = false;
+      }, 250);
+    });
+
+    li.addEventListener('pointerleave', () => {
+      swipeStarted = false;
+    });
+
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await apiFetch(`${API_BASE}/sessions/${session.id}`, { method: 'DELETE' });
+        if (currentSession?.id === session.id) {
+          currentSession = null;
+          renderSession();
+        }
+        await loadSessions();
+      } catch (error) {
+        console.error('Failed to delete session:', error);
+      }
+    });
 
     li.addEventListener('click', () => {
+      if (didSwipe) return;
+      if (li.classList.contains('show-delete')) {
+        closeItem();
+        return;
+      }
+      if (openSessionActionItem) {
+        openSessionActionItem.classList.remove('show-delete');
+        openSessionActionItem = null;
+      }
       if (socket && currentSession?.id !== session.id) {
         socket.emit('load_session', session.id);
       }

@@ -296,23 +296,53 @@ header h1 {
 
 .session-item {
   height: 36px;
-  padding: 0 var(--spacing-lg);
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: background 0.15s ease;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.session-item-content {
+  height: 100%;
+  padding: 0 var(--spacing-lg);
+  background: var(--bg-surface);
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  position: relative;
+  z-index: 1;
+  transition: transform 0.18s ease, background 0.15s ease;
 }
 
-.session-item:hover {
+.session-item:hover .session-item-content {
   background: var(--bg-surface-elevated);
 }
 
-.session-item.active {
+.session-item.active .session-item-content {
   background: var(--accent-light);
   border-left: 3px solid var(--accent);
+}
+
+.session-item.show-delete .session-item-content {
+  transform: translateX(-72px);
+}
+
+.session-delete-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 72px;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  background: var(--error);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 0;
 }
 
 .session-item-title {
@@ -938,6 +968,10 @@ header h1 {
   }
 
   .session-item {
+    padding: 0;
+  }
+
+  .session-item-content {
     padding: 0 var(--spacing-md);
   }
 
