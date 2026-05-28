@@ -25,6 +25,13 @@ const interruptBtn = document.getElementById('interrupt-btn');
 const sessionTitle = document.getElementById('session-title');
 const chatHeader = document.getElementById('chat-header');
 const toggleSidebarBtn = document.getElementById('toggle-sidebar');
+const newSessionModal = document.getElementById('new-session-modal');
+const assistantSelect = document.getElementById('assistant-select');
+const sessionNameInput = document.getElementById('session-name-input');
+const projectDirInput = document.getElementById('project-dir-input');
+const closeNewSessionModalBtn = document.getElementById('close-new-session-modal');
+const cancelNewSessionBtn = document.getElementById('cancel-new-session-btn');
+const createSessionBtn = document.getElementById('create-session-btn');
 
 let isNavVisible = true;
 let openSessionActionItem = null;
@@ -70,6 +77,26 @@ function createDurationEl(durationMs) {
   duration.className = 'message-duration';
   duration.textContent = `耗时 ${durationText}`;
   return duration;
+}
+
+function openNewSessionModal() {
+  newSessionModal.style.display = 'flex';
+  sessionNameInput.focus();
+  sessionNameInput.select();
+}
+
+function closeNewSessionModal() {
+  newSessionModal.style.display = 'none';
+}
+
+function createSessionFromModal() {
+  if (!socket) return;
+  socket.emit('new_session', {
+    provider: assistantSelect.value,
+    title: sessionNameInput.value.trim(),
+    projectDir: projectDirInput.value.trim()
+  });
+  closeNewSessionModal();
 }
 
 function showMessage(message, type = 'info') {
@@ -217,6 +244,11 @@ function connectSocket() {
     highlightSession(session.id);
   });
 
+  socket.on('session_error', (message) => {
+    console.error('Session error:', message);
+    sessionTitle.textContent = message || 'Failed to create session';
+  });
+
   socket.on('message_added', (msg) => {
     if (!currentSession) return;
     currentSession.messages.push(msg);
@@ -327,6 +359,7 @@ function renderSession() {
   }
 
   sessionTitle.textContent = currentSession.title || 'Untitled';
+  sessionTitle.title = `${currentSession.assistantName || 'Claude'} · ${currentSession.projectDir || ''}`;
   renderMessages();
 }
 
@@ -636,8 +669,34 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 });
 
 document.getElementById('new-session-btn').addEventListener('click', () => {
-  if (socket) {
-    socket.emit('new_session');
+  openNewSessionModal();
+});
+
+closeNewSessionModalBtn.addEventListener('click', closeNewSessionModal);
+cancelNewSessionBtn.addEventListener('click', closeNewSessionModal);
+createSessionBtn.addEventListener('click', createSessionFromModal);
+
+newSessionModal.addEventListener('click', (e) => {
+  if (e.target === newSessionModal) {
+    closeNewSessionModal();
+  }
+});
+
+projectDirInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    createSessionFromModal();
+  }
+});
+
+sessionNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    createSessionFromModal();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && newSessionModal.style.display !== 'none') {
+    closeNewSessionModal();
   }
 });
 

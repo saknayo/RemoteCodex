@@ -70,9 +70,23 @@ function getProvider(id = CLI_PROVIDER) {
   return PROVIDERS[id] || PROVIDERS.claude;
 }
 
+function normalizeProjectDir(projectDir) {
+  const dir = (projectDir || process.cwd()).trim() || process.cwd();
+  const resolved = path.resolve(dir);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new Error(`Project directory not found: ${resolved}`);
+  }
+  return resolved;
+}
+
+function normalizeSessionTitle(title) {
+  const value = (title || '').trim();
+  return value ? value.slice(0, 80) : 'New Conversation';
+}
+
 function buildCliCommand(provider, session, content, isFirstMessage) {
   if (provider.id === 'codex') {
-    const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access'];
+    const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', '--cd', session.projectDir];
     if (isFirstMessage || !session.cliSessionId) {
       return { command: provider.path, args: [...baseArgs, content] };
     }
@@ -96,6 +110,7 @@ app.get('/api/sessions', verifyToken, requireAuth, (req, res) => {
         title: data.title || 'Untitled',
         provider: data.provider || 'claude',
         assistantName: data.assistantName || getProvider(data.provider).assistantName,
+        projectDir: data.projectDir || process.cwd(),
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       });
@@ -158,15 +173,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('new_session', () => {
-    const provider = getProvider();
+  socket.on('new_session', (options = {}) => {
+    let projectDir;
+    try {
+      projectDir = normalizeProjectDir(options.projectDir);
+    } catch (error) {
+      socket.emit('session_error', error.message);
+      return;
+    }
+    const provider = getProvider(options.provider);
     sessionId = uuidv4();
     currentSession = {
       id: sessionId,
       cliSessionId: uuidv4(),
       provider: provider.id,
       assistantName: provider.assistantName,
-      title: 'New Conversation',
+      projectDir,
+      title: normalizeSessionTitle(options.title),
+      customTitle: Boolean((options.title || '').trim()),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messages: []
@@ -180,12 +204,18 @@ io.on('connection', (socket) => {
     currentSession.provider = currentSession.provider || 'claude';
     currentSession.assistantName = getProvider(currentSession.provider).assistantName;
     currentSession.cliSessionId = currentSession.cliSessionId || uuidv4();
+    try {
+      currentSession.projectDir = normalizeProjectDir(currentSession.projectDir);
+    } catch (error) {
+      socket.emit('stream_error', error.message);
+      return;
+    }
     const provider = getProvider(currentSession.provider);
 
     const userMsg = { role: 'user', content, timestamp: new Date().toISOString() };
     currentSession.messages.push(userMsg);
 
-    if (currentSession.messages.length === 1) {
+    if (currentSession.messages.length === 1 && !currentSession.customTitle) {
       currentSession.title = content.slice(0, 30) + (content.length > 30 ? '...' : '');
     }
 
@@ -210,6 +240,7 @@ io.on('connection', (socket) => {
       const { command, args } = buildCliCommand(provider, currentSession, content, isFirstMessage);
       const cli = spawn(command, args, {
         env: process.env,
+        cwd: currentSession.projectDir,
         stdio: ['ignore', 'pipe', 'pipe']
       });
 

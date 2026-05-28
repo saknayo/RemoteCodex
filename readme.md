@@ -59,3 +59,4 @@ remote_codex/
 - Claude 路径：`CLAUDE_CLI_PATH=/path/to/claude`
 - Codex 路径：`CODEX_CLI_PATH=/path/to/codex`
 - 旧的 `CLI_PATH` 仍可作为 Claude 路径兼容配置
+- 新建 Session 时可选择 Claude/Codex，输入自定义 Session 名和项目目录；CLI 会在该目录下运行

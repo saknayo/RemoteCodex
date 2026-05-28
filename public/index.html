@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Remote Codex</title>
-  <link rel="stylesheet" href="/style.css?v=50">
+  <link rel="stylesheet" href="/style.css?v=53">
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -58,9 +58,37 @@
           </div>
         </main>
       </div>
+
+      <div id="new-session-modal" class="modal-overlay" style="display: none;">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>New Session</h2>
+            <button id="close-new-session-modal" class="icon-btn" aria-label="Close">×</button>
+          </div>
+          <div class="modal-field">
+            <label for="assistant-select">Assistant</label>
+            <select id="assistant-select">
+              <option value="codex">Codex</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label for="session-name-input">Session Name</label>
+            <input id="session-name-input" type="text" placeholder="New Conversation">
+          </div>
+          <div class="modal-field">
+            <label for="project-dir-input">Project Directory</label>
+            <input id="project-dir-input" type="text" value="/root/remote_codex" placeholder="/path/to/project">
+          </div>
+          <div class="modal-actions">
+            <button id="cancel-new-session-btn" type="button">Cancel</button>
+            <button id="create-session-btn" type="button">Create</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <script src="/app.js?v=50"></script>
+  <script src="/app.js?v=53"></script>
 </body>
 </html>
