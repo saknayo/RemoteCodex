@@ -3,7 +3,13 @@ let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
 let isStreaming = false;
-let streamingContentEl = null;
+
+// 流式渲染用的 DOM 引用
+let streamingBubble = null;
+let thinkingEl = null;
+let toolUseEl = null;
+let textContentEl = null;
+let hasThinking = false;
 
 const loginView = document.getElementById('login-view');
 const mainView = document.getElementById('main-view');
@@ -59,6 +65,64 @@ function apiFetch(url, options = {}) {
   });
 }
 
+function scrollToBottom() {
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// 创建 assistant 气泡的骨架（thinking + toolUse + content 区域）
+function createAssistantSkeleton() {
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble assistant';
+
+  const avatarCol = document.createElement('div');
+  avatarCol.className = 'avatar-col';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.textContent = 'AI';
+  avatarCol.appendChild(avatar);
+
+  const sender = document.createElement('div');
+  sender.className = 'message-sender';
+  sender.textContent = 'Claude';
+  avatarCol.appendChild(sender);
+
+  const time = document.createElement('div');
+  time.className = 'message-time';
+  time.textContent = new Date().toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  avatarCol.appendChild(time);
+
+  bubble.appendChild(avatarCol);
+
+  const body = document.createElement('div');
+  body.className = 'message-body';
+
+  // thinking 区域（默认隐藏）
+  thinkingEl = document.createElement('div');
+  thinkingEl.className = 'thinking-block collapsed';
+  thinkingEl.innerHTML = '<div class="thinking-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">▶ 思考过程</div><div class="thinking-content"></div>';
+  thinkingEl.style.display = 'none';
+  body.appendChild(thinkingEl);
+
+  // tool use 区域（默认隐藏）
+  toolUseEl = document.createElement('div');
+  toolUseEl.className = 'tool-use-area';
+  toolUseEl.style.display = 'none';
+  body.appendChild(toolUseEl);
+
+  // 文本内容区域
+  textContentEl = document.createElement('div');
+  textContentEl.className = 'message-content';
+  body.appendChild(textContentEl);
+
+  bubble.appendChild(body);
+  messagesContainer.appendChild(bubble);
+  streamingBubble = bubble;
+}
+
 function connectSocket() {
   if (socket) {
     socket.disconnect();
@@ -91,61 +155,116 @@ function connectSocket() {
   });
 
   socket.on('message_added', (msg) => {
-    console.log('[DEBUG] message_added:', msg.role, msg.content?.substring(0, 30));
     if (!currentSession) return;
     currentSession.messages.push(msg);
-    renderMessages();
+    // user 消息正常渲染
+    if (msg.role === 'user') {
+      renderMessages();
+    }
+    // assistant 空消息：创建流式骨架
     if (msg.role === 'assistant' && isStreaming) {
-      const lastBubble = messagesContainer.lastElementChild;
-      console.log('[DEBUG] lastBubble:', lastBubble?.className);
-      if (lastBubble) {
-        streamingContentEl = lastBubble.querySelector('.message-content');
-        console.log('[DEBUG] streamingContentEl:', !!streamingContentEl);
-      }
+      createAssistantSkeleton();
+      hasThinking = false;
     }
   });
 
-  socket.on('stream_chunk', (chunk) => {
-    console.log('[DEBUG] stream_chunk:', chunk?.substring(0, 30));
-    if (!currentSession || currentSession.messages.length === 0) return;
-    const lastMsg = currentSession.messages[currentSession.messages.length - 1];
-    console.log('[DEBUG] lastMsg.role:', lastMsg.role, 'streamingContentEl:', !!streamingContentEl);
-    if (lastMsg.role !== 'assistant') return;
-    lastMsg.content += chunk;
-    if (streamingContentEl) {
-      streamingContentEl.textContent = lastMsg.content;
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  socket.on('stream_thinking_start', () => {
+    if (!thinkingEl) return;
+    thinkingEl.style.display = 'block';
+    thinkingEl.classList.remove('collapsed');
+    hasThinking = true;
+  });
+
+  socket.on('stream_thinking', (chunk) => {
+    if (!thinkingEl) return;
+    const contentEl = thinkingEl.querySelector('.thinking-content');
+    contentEl.textContent += chunk;
+    scrollToBottom();
+  });
+
+  socket.on('stream_tool_use', (tool) => {
+    if (!toolUseEl) return;
+    toolUseEl.style.display = 'block';
+    const item = document.createElement('div');
+    item.className = 'tool-use-item';
+
+    const header = document.createElement('div');
+    header.className = 'tool-use-header';
+    const icon = tool.name === 'Bash' ? '⚡' : '🔧';
+    header.textContent = `${icon} ${tool.name}`;
+    item.appendChild(header);
+
+    if (tool.name === 'Bash' && tool.input.command) {
+      const code = document.createElement('pre');
+      code.className = 'tool-use-code';
+      code.textContent = tool.input.command;
+      item.appendChild(code);
+    } else if (tool.name === 'Read' && tool.input.file_path) {
+      const path = document.createElement('div');
+      path.className = 'tool-use-path';
+      path.textContent = tool.input.file_path;
+      item.appendChild(path);
+    } else if (tool.name === 'Edit' || tool.name === 'Write') {
+      const path = document.createElement('div');
+      path.className = 'tool-use-path';
+      path.textContent = tool.input.file_path || '';
+      item.appendChild(path);
+    } else {
+      const desc = document.createElement('div');
+      desc.className = 'tool-use-path';
+      desc.textContent = JSON.stringify(tool.input).substring(0, 200);
+      item.appendChild(desc);
     }
+
+    toolUseEl.appendChild(item);
+    scrollToBottom();
+  });
+
+  socket.on('stream_tool_result', (data) => {
+    if (!toolUseEl) return;
+    const lastItem = toolUseEl.lastElementChild;
+    if (!lastItem) return;
+    const resultEl = document.createElement('pre');
+    resultEl.className = 'tool-result-code';
+    resultEl.textContent = data.result || '(no output)';
+    if (data.isError) resultEl.classList.add('error');
+    lastItem.appendChild(resultEl);
+    scrollToBottom();
+  });
+
+  socket.on('stream_text', (text) => {
+    if (!textContentEl) return;
+    textContentEl.textContent += text;
+    scrollToBottom();
   });
 
   socket.on('stream_end', (data) => {
-    streamingContentEl = null;
     const content = data?.content || '';
     // 更新数据
     if (currentSession && currentSession.messages.length > 0) {
       const lastMsg = currentSession.messages[currentSession.messages.length - 1];
       if (lastMsg.role === 'assistant') {
         lastMsg.content = content;
+        lastMsg.thinking = data.thinking || '';
+        lastMsg.toolUses = data.toolUses || [];
       }
     }
-    // 直接更新最后一个 assistant 气泡的 DOM，避免重建全部
-    const allContent = messagesContainer.querySelectorAll('.message-bubble.assistant .message-content');
-    const lastContent = allContent[allContent.length - 1];
-    if (lastContent) {
-      lastContent.innerHTML = marked.parse(content || '');
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
+    // 清理流式状态
+    streamingBubble = null;
+    thinkingEl = null;
+    toolUseEl = null;
+    textContentEl = null;
     isStreaming = false;
     sendBtn.textContent = 'Send';
     sendBtn.disabled = false;
     interruptBtn.style.display = 'none';
+    // 最终渲染（Markdown + 保存的 thinking/tool 数据）
+    renderMessages();
     loadSessions();
   });
 
   socket.on('stream_error', (error) => {
-    console.error('Stream stderr:', error);
-    // stderr 只是警告（如 stdin 提示），不终止流式传输
-    // 真正的错误由 stream_end(code) 处理
+    // stderr 只是警告，不处理
   });
 }
 
@@ -204,15 +323,82 @@ function renderMessages() {
 
     bubble.appendChild(avatarCol);
 
-    const content = document.createElement('div');
-    content.className = 'message-content';
-    content.innerHTML = marked.parse(msg.content || '');
+    if (msg.role === 'assistant') {
+      const body = document.createElement('div');
+      body.className = 'message-body';
 
-    bubble.appendChild(content);
+      // thinking
+      if (msg.thinking) {
+        const thinkBlock = document.createElement('div');
+        thinkBlock.className = 'thinking-block collapsed';
+        thinkBlock.innerHTML = `<div class="thinking-header" onclick="this.parentElement.classList.toggle('collapsed')">▶ 思考过程</div><div class="thinking-content">${escapeHtml(msg.thinking)}</div>`;
+        body.appendChild(thinkBlock);
+      }
+
+      // tool uses
+      if (msg.toolUses && msg.toolUses.length > 0) {
+        const toolArea = document.createElement('div');
+        toolArea.className = 'tool-use-area';
+        for (const tool of msg.toolUses) {
+          const item = document.createElement('div');
+          item.className = 'tool-use-item';
+          const header = document.createElement('div');
+          header.className = 'tool-use-header';
+          const icon = tool.name === 'Bash' ? '⚡' : '🔧';
+          header.textContent = `${icon} ${tool.name}`;
+          item.appendChild(header);
+          if (tool.name === 'Bash' && tool.input.command) {
+            const code = document.createElement('pre');
+            code.className = 'tool-use-code';
+            code.textContent = tool.input.command;
+            item.appendChild(code);
+          } else if (tool.input.file_path) {
+            const p = document.createElement('div');
+            p.className = 'tool-use-path';
+            p.textContent = tool.input.file_path;
+            item.appendChild(p);
+          } else {
+            const p = document.createElement('div');
+            p.className = 'tool-use-path';
+            p.textContent = JSON.stringify(tool.input).substring(0, 200);
+            item.appendChild(p);
+          }
+          // 工具结果
+          if (tool.result) {
+            const resultEl = document.createElement('pre');
+            resultEl.className = 'tool-result-code';
+            resultEl.textContent = tool.result;
+            item.appendChild(resultEl);
+          }
+          toolArea.appendChild(item);
+        }
+        body.appendChild(toolArea);
+      }
+
+      // content
+      const content = document.createElement('div');
+      content.className = 'message-content';
+      content.innerHTML = marked.parse(msg.content || '');
+      body.appendChild(content);
+
+      bubble.appendChild(body);
+    } else {
+      const content = document.createElement('div');
+      content.className = 'message-content';
+      content.textContent = msg.content;
+      bubble.appendChild(content);
+    }
+
     messagesContainer.appendChild(bubble);
   }
 
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 async function loadSessions() {

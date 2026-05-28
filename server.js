@@ -153,6 +153,8 @@ io.on('connection', (socket) => {
     const assistantMsg = {
       role: 'assistant',
       content: '',
+      thinking: '',
+      toolUses: [],
       timestamp: new Date().toISOString()
     };
     currentSession.messages.push(assistantMsg);
@@ -161,32 +163,113 @@ io.on('connection', (socket) => {
     try {
       const isFirstMessage = currentSession.messages.filter(m => m.role === 'user').length <= 1;
       const args = isFirstMessage
-        ? ['-p', content, '--session-id', currentSession.cliSessionId, '--permission-mode', 'auto']
-        : ['-p', content, '--resume', currentSession.cliSessionId, '--permission-mode', 'auto'];
+        ? ['-p', content, '--session-id', currentSession.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+        : ['-p', content, '--resume', currentSession.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
       const cli = spawn(CLI_PATH, args, {
         env: process.env
       });
 
       let fullResponse = '';
+      let buffer = '';
+      let thinking = '';
+      let currentTool = null;
+      let toolInput = '';
+      let resultText = '';
 
       cli.stdout.on('data', (data) => {
-        const text = data.toString();
-        fullResponse += text;
-        assistantMsg.content = fullResponse;
-        console.log(`[DEBUG] stdout chunk: ${text.length} bytes, total: ${fullResponse.length}`);
-        socket.emit('stream_chunk', text);
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            handleStreamEvent(event);
+          } catch (e) {
+            // 非 JSON 行忽略
+          }
+        }
       });
 
+      function handleStreamEvent(event) {
+        // 捕获 result 事件（最终完整文本）
+        if (event.type === 'result' && event.result) {
+          resultText = event.result;
+          return;
+        }
+        // 捕获工具执行结果
+        if (event.type === 'user' && event.tool_use_result) {
+          const tr = event.tool_use_result;
+          const result = tr.stdout || tr.stderr || '';
+          // 更新最后一个工具调用的结果
+          const lastTool = assistantMsg.toolUses[assistantMsg.toolUses.length - 1];
+          if (lastTool) {
+            lastTool.result = result.substring(0, 2000);
+            socket.emit('stream_tool_result', { result: lastTool.result, isError: tr.is_error });
+          }
+          return;
+        }
+        if (event.type !== 'stream_event' || !event.event) return;
+        const evt = event.event;
+
+        if (evt.type === 'content_block_start') {
+          const block = evt.content_block;
+          if (block.type === 'thinking') {
+            thinking = '';
+            console.log('[STREAM] thinking_start');
+            socket.emit('stream_thinking_start');
+          } else if (block.type === 'tool_use') {
+            toolInput = '';
+            currentTool = { id: block.id, name: block.name };
+          }
+        } else if (evt.type === 'content_block_delta') {
+          const delta = evt.delta;
+          if (delta.type === 'thinking_delta') {
+            thinking += delta.thinking;
+            socket.emit('stream_thinking', delta.thinking);
+          } else if (delta.type === 'text_delta') {
+            fullResponse += delta.text;
+            if (fullResponse.length < 50) console.log('[STREAM] text_delta:', delta.text);
+            socket.emit('stream_text', delta.text);
+          } else if (delta.type === 'input_json_delta') {
+            toolInput += delta.partial_json;
+          }
+        } else if (evt.type === 'content_block_stop') {
+          if (currentTool) {
+            let input;
+            try {
+              input = JSON.parse(toolInput);
+            } catch (e) {
+              input = { raw: toolInput };
+            }
+            socket.emit('stream_tool_use', { name: currentTool.name, input });
+            assistantMsg.toolUses.push({ name: currentTool.name, input });
+            currentTool = null;
+            toolInput = '';
+          }
+          if (thinking) {
+            assistantMsg.thinking = thinking;
+            thinking = '';
+          }
+        }
+      }
+
       cli.stderr.on('data', (data) => {
-        console.log('[DEBUG] stderr:', data.toString());
-        socket.emit('stream_error', data.toString());
+        // stderr 只是警告，不处理
       });
 
       cli.on('close', (code) => {
-        console.log(`[DEBUG] cli close, code=${code}, response length=${fullResponse.length}`);
+        // 优先用 result 事件的完整文本，否则用累积的 text_delta
+        assistantMsg.content = resultText || fullResponse;
         currentSession.updatedAt = new Date().toISOString();
         saveSession(currentSession);
-        socket.emit('stream_end', { code, content: fullResponse });
+        socket.emit('stream_end', {
+          code,
+          content: assistantMsg.content,
+          thinking: assistantMsg.thinking,
+          toolUses: assistantMsg.toolUses
+        });
       });
 
       activeProcesses.set(socket.id, cli);
