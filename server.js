@@ -87,7 +87,7 @@ function normalizeSessionTitle(title) {
 function buildCliCommand(provider, session, content, isFirstMessage) {
   if (provider.id === 'codex') {
     const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', '--cd', session.projectDir];
-    if (isFirstMessage || !session.cliSessionId) {
+    if (isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
       return { command: provider.path, args: [...baseArgs, content] };
     }
     return { command: provider.path, args: ['exec', 'resume', '--json', session.cliSessionId, content] };
@@ -191,6 +191,7 @@ io.on('connection', (socket) => {
       projectDir,
       title: normalizeSessionTitle(options.title),
       customTitle: Boolean((options.title || '').trim()),
+      codexThreadReady: provider.id === 'codex' ? false : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messages: []
@@ -238,6 +239,7 @@ io.on('connection', (socket) => {
     try {
       const isFirstMessage = currentSession.messages.filter(m => m.role === 'user').length <= 1;
       const { command, args } = buildCliCommand(provider, currentSession, content, isFirstMessage);
+      let processFailed = false;
       const cli = spawn(command, args, {
         env: process.env,
         cwd: currentSession.projectDir,
@@ -251,6 +253,8 @@ io.on('connection', (socket) => {
       let toolInput = '';
       let resultText = '';
       let resultDurationMs = null;
+      let stderrText = '';
+      const codexErrors = [];
       const requestStartedAt = Date.now();
 
       cli.stdout.on('data', (data) => {
@@ -280,6 +284,7 @@ io.on('connection', (socket) => {
       function handleCodexEvent(event) {
         if (event.type === 'thread.started' && event.thread_id) {
           currentSession.cliSessionId = event.thread_id;
+          currentSession.codexThreadReady = true;
           return;
         }
 
@@ -297,7 +302,9 @@ io.on('connection', (socket) => {
             assistantMsg.toolUses.push(tool);
             socket.emit('stream_tool_use', { name: tool.name, input: tool.input });
             socket.emit('stream_tool_result', { result: tool.result || '(no output)', isError: item.exit_code !== 0 });
-          } else if (item.type && item.type !== 'error') {
+          } else if (item.type === 'error' && item.message) {
+            codexErrors.push(item.message);
+          } else if (item.type) {
             const tool = {
               name: item.type,
               input: item.command ? { command: item.command } : item
@@ -377,12 +384,26 @@ io.on('connection', (socket) => {
       }
 
       cli.stderr.on('data', (data) => {
-        // stderr 只是警告，不处理
+        stderrText += data.toString();
+      });
+
+      cli.on('error', (error) => {
+        processFailed = true;
+        assistantMsg.content = `Failed to start ${provider.assistantName}: ${error.message}`;
+        assistantMsg.durationMs = Date.now() - requestStartedAt;
+        currentSession.updatedAt = new Date().toISOString();
+        saveSession(currentSession);
+        socket.emit('stream_error', assistantMsg.content);
+        activeProcesses.delete(socket.id);
       });
 
       cli.on('close', (code) => {
+        if (processFailed) {
+          return;
+        }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
-        assistantMsg.content = resultText || fullResponse;
+        const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
+        assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
         currentSession.updatedAt = new Date().toISOString();
         saveSession(currentSession);
@@ -394,6 +415,7 @@ io.on('connection', (socket) => {
           durationMs: assistantMsg.durationMs,
           assistantName: assistantMsg.assistantName
         });
+        activeProcesses.delete(socket.id);
       });
 
       activeProcesses.set(socket.id, cli);

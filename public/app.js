@@ -354,7 +354,26 @@ function connectSocket() {
   });
 
   socket.on('stream_error', (error) => {
-    // stderr 只是警告，不处理
+    const message = error || 'Assistant failed to respond.';
+    if (textContentEl) {
+      textContentEl.style.display = 'block';
+      textContentEl.textContent = message;
+    }
+    if (currentSession && currentSession.messages.length > 0) {
+      const lastMsg = currentSession.messages[currentSession.messages.length - 1];
+      if (lastMsg.role === 'assistant') {
+        lastMsg.content = message;
+      }
+    }
+    streamingBubble = null;
+    thinkingEl = null;
+    toolUseEl = null;
+    textContentEl = null;
+    isStreaming = false;
+    sendBtn.textContent = 'Send';
+    sendBtn.disabled = false;
+    interruptBtn.style.display = 'none';
+    renderMessages();
   });
 }
 
