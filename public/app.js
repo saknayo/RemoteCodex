@@ -576,6 +576,24 @@ function renderSession() {
   renderMessages();
 }
 
+function showSessionLoading(session) {
+  mainView.classList.remove('no-session');
+  currentSession = {
+    id: session.id,
+    title: session.title || 'Untitled',
+    assistantName: session.assistantName || 'Claude',
+    projectDir: session.projectDir || '',
+    messages: []
+  };
+  sessionTitle.textContent = currentSession.title;
+  sessionTitle.title = `${currentSession.assistantName} · ${currentSession.projectDir}`;
+  messagesContainer.innerHTML = '';
+  const loading = document.createElement('div');
+  loading.className = 'session-loading-state';
+  loading.textContent = 'Loading session...';
+  messagesContainer.appendChild(loading);
+}
+
 function renderMessages() {
   if (!currentSession) return;
 
@@ -759,7 +777,13 @@ function renderSessionList(sessions) {
 
     li.addEventListener('click', () => {
       closeSessionContextMenu();
-      if (socket && currentSession?.id !== session.id) {
+      highlightSession(session.id);
+      setMainTab('conversation');
+      if (currentSession?.id === session.id) {
+        return;
+      }
+      showSessionLoading(session);
+      if (socket) {
         socket.emit('load_session', session.id);
       }
     });
