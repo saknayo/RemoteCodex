@@ -4,6 +4,7 @@
 remote_codex/
 ├── CLAUDE.md          # 项目规则（所有工作前必读）
 ├── AGENTS.md          # Agent 配置说明
+├── followme.md        # 根目录必须遵守的规则
 ├── readme.md          # 本文件
 ├── package.json       # Node.js 依赖配置
 ├── server.js          # Web 服务器主程序（支持 Claude/Codex CLI）
