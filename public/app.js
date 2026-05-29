@@ -35,9 +35,23 @@ const projectDirInput = document.getElementById('project-dir-input');
 const closeNewSessionModalBtn = document.getElementById('close-new-session-modal');
 const cancelNewSessionBtn = document.getElementById('cancel-new-session-btn');
 const createSessionBtn = document.getElementById('create-session-btn');
+const sessionRenameModal = document.getElementById('session-rename-modal');
+const sessionRenameInput = document.getElementById('session-rename-input');
+const closeSessionRenameModalBtn = document.getElementById('close-session-rename-modal');
+const cancelSessionRenameBtn = document.getElementById('cancel-session-rename-btn');
+const saveSessionRenameBtn = document.getElementById('save-session-rename-btn');
+const sessionDetailModal = document.getElementById('session-detail-modal');
+const sessionDetailList = document.getElementById('session-detail-list');
+const closeSessionDetailModalBtn = document.getElementById('close-session-detail-modal');
 
 let isNavVisible = true;
 let openSessionActionItem = null;
+let sessionContextMenu = null;
+let sessionMenuCloseHandler = null;
+let selectedSessionForAction = null;
+let longPressTimer = null;
+let suppressNextSessionClick = false;
+let actionToastTimer = null;
 
 function setMainTab(tab) {
   const showSessions = tab === 'sessions';
@@ -106,6 +120,118 @@ function openNewSessionModal() {
 
 function closeNewSessionModal() {
   newSessionModal.style.display = 'none';
+}
+
+function showActionToast(message, type = 'info') {
+  let toast = document.getElementById('action-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'action-toast';
+    document.body.appendChild(toast);
+  }
+
+  toast.className = `action-toast ${type}`;
+  toast.textContent = message;
+  toast.style.display = 'block';
+
+  if (actionToastTimer) {
+    clearTimeout(actionToastTimer);
+  }
+  actionToastTimer = setTimeout(() => {
+    toast.style.display = 'none';
+  }, 2200);
+}
+
+function openSessionRenameModal(session) {
+  selectedSessionForAction = session;
+  sessionRenameInput.value = session.title || 'Untitled';
+  sessionRenameModal.style.display = 'flex';
+  sessionRenameInput.focus();
+  sessionRenameInput.select();
+}
+
+function closeSessionRenameModal() {
+  sessionRenameModal.style.display = 'none';
+  selectedSessionForAction = null;
+}
+
+async function saveSessionRename() {
+  if (!selectedSessionForAction) return;
+  const title = sessionRenameInput.value.trim();
+  if (!title) {
+    sessionRenameInput.focus();
+    return;
+  }
+
+  try {
+    const session = await apiFetch(`${API_BASE}/sessions/${selectedSessionForAction.id}/title`, {
+      method: 'PUT',
+      body: JSON.stringify({ title })
+    });
+    if (currentSession?.id === session.id) {
+      currentSession = session;
+      renderSession();
+    }
+    closeSessionRenameModal();
+    await loadSessions();
+    showActionToast('Session renamed', 'success');
+  } catch (error) {
+    console.error('Failed to rename session:', error);
+    showActionToast('Rename failed', 'error');
+  }
+}
+
+function addSessionDetailRow(label, value) {
+  const term = document.createElement('dt');
+  term.textContent = label;
+  const desc = document.createElement('dd');
+  desc.textContent = value || '-';
+  sessionDetailList.appendChild(term);
+  sessionDetailList.appendChild(desc);
+}
+
+function formatDetailDate(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString('zh-CN');
+}
+
+async function openSessionDetailModal(session) {
+  try {
+    const detail = await apiFetch(`${API_BASE}/sessions/${session.id}`);
+    sessionDetailList.innerHTML = '';
+    addSessionDetailRow('Name', detail.title || 'Untitled');
+    addSessionDetailRow('Assistant', detail.assistantName || detail.provider || 'Claude');
+    addSessionDetailRow('Provider', detail.provider || 'claude');
+    addSessionDetailRow('Project Directory', detail.projectDir || '');
+    addSessionDetailRow('Messages', String(detail.messages?.length || 0));
+    addSessionDetailRow('Created', formatDetailDate(detail.createdAt));
+    addSessionDetailRow('Updated', formatDetailDate(detail.updatedAt));
+    sessionDetailModal.style.display = 'flex';
+  } catch (error) {
+    console.error('Failed to load session details:', error);
+    showActionToast('Details unavailable', 'error');
+  }
+}
+
+function closeSessionDetailModal() {
+  sessionDetailModal.style.display = 'none';
+  sessionDetailList.innerHTML = '';
+}
+
+async function copySessionConfig(session) {
+  try {
+    const copied = await apiFetch(`${API_BASE}/sessions/${session.id}/copy`, {
+      method: 'POST'
+    });
+    await loadSessions();
+    if (socket) {
+      socket.emit('load_session', copied.id);
+    }
+    showActionToast('Session copied', 'success');
+  } catch (error) {
+    console.error('Failed to copy session:', error);
+    showActionToast('Copy failed', 'error');
+  }
 }
 
 function createSessionFromModal() {
@@ -512,6 +638,67 @@ async function loadSessions() {
   }
 }
 
+function closeSessionContextMenu() {
+  if (sessionContextMenu) {
+    sessionContextMenu.remove();
+    sessionContextMenu = null;
+  }
+  if (sessionMenuCloseHandler) {
+    document.removeEventListener('pointerdown', sessionMenuCloseHandler, true);
+    document.removeEventListener('keydown', sessionMenuCloseHandler, true);
+    window.removeEventListener('resize', sessionMenuCloseHandler);
+    sessionMenuCloseHandler = null;
+  }
+}
+
+function createSessionMenuButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    closeSessionContextMenu();
+    await action();
+  });
+  return button;
+}
+
+function openSessionContextMenu(session, x, y) {
+  closeSessionContextMenu();
+  closeSessionDetailModal();
+
+  sessionContextMenu = document.createElement('div');
+  sessionContextMenu.className = 'session-context-menu';
+  sessionContextMenu.appendChild(createSessionMenuButton('Rename', () => openSessionRenameModal(session)));
+  sessionContextMenu.appendChild(createSessionMenuButton('Details', () => openSessionDetailModal(session)));
+  sessionContextMenu.appendChild(createSessionMenuButton('Copy Session', () => copySessionConfig(session)));
+  document.body.appendChild(sessionContextMenu);
+
+  const menuRect = sessionContextMenu.getBoundingClientRect();
+  const left = Math.min(Math.max(x, 8), window.innerWidth - menuRect.width - 8);
+  const top = Math.min(Math.max(y, 8), window.innerHeight - menuRect.height - 8);
+  sessionContextMenu.style.left = `${left}px`;
+  sessionContextMenu.style.top = `${top}px`;
+
+  sessionMenuCloseHandler = (event) => {
+    if (event.type === 'keydown' && event.key !== 'Escape') return;
+    if (event.type === 'pointerdown' && sessionContextMenu?.contains(event.target)) return;
+    closeSessionContextMenu();
+  };
+  setTimeout(() => {
+    document.addEventListener('pointerdown', sessionMenuCloseHandler, true);
+    document.addEventListener('keydown', sessionMenuCloseHandler, true);
+    window.addEventListener('resize', sessionMenuCloseHandler);
+  }, 0);
+}
+
+function clearLongPressTimer() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
 function renderSessionList(sessions) {
   sessionList.innerHTML = '';
   openSessionActionItem = null;
@@ -579,6 +766,12 @@ function renderSessionList(sessions) {
       startY = touch.clientY;
       swipeStarted = true;
       didSwipe = false;
+      clearLongPressTimer();
+      longPressTimer = setTimeout(() => {
+        suppressNextSessionClick = true;
+        swipeStarted = false;
+        openSessionContextMenu(session, touch.clientX, touch.clientY);
+      }, 650);
     }, { passive: true });
 
     li.addEventListener('touchmove', (e) => {
@@ -586,6 +779,9 @@ function renderSessionList(sessions) {
       const touch = e.touches[0];
       const deltaX = touch.clientX - startX;
       const deltaY = touch.clientY - startY;
+      if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+        clearLongPressTimer();
+      }
       if (Math.abs(deltaY) > Math.abs(deltaX)) return;
       if (deltaX < -30) {
         openItem();
@@ -597,10 +793,18 @@ function renderSessionList(sessions) {
     }, { passive: true });
 
     li.addEventListener('touchend', () => {
+      clearLongPressTimer();
       swipeStarted = false;
       setTimeout(() => {
         didSwipe = false;
+        suppressNextSessionClick = false;
       }, 250);
+    });
+
+    li.addEventListener('touchcancel', () => {
+      clearLongPressTimer();
+      swipeStarted = false;
+      suppressNextSessionClick = false;
     });
 
     li.addEventListener('pointerdown', (e) => {
@@ -636,6 +840,15 @@ function renderSessionList(sessions) {
       swipeStarted = false;
     });
 
+    li.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      suppressNextSessionClick = true;
+      openSessionContextMenu(session, e.clientX, e.clientY);
+      setTimeout(() => {
+        suppressNextSessionClick = false;
+      }, 250);
+    });
+
     deleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       try {
@@ -651,11 +864,16 @@ function renderSessionList(sessions) {
     });
 
     li.addEventListener('click', () => {
+      if (suppressNextSessionClick) {
+        suppressNextSessionClick = false;
+        return;
+      }
       if (didSwipe) return;
       if (li.classList.contains('show-delete')) {
         closeItem();
         return;
       }
+      closeSessionContextMenu();
       if (openSessionActionItem) {
         openSessionActionItem.classList.remove('show-delete');
         openSessionActionItem = null;
@@ -769,6 +987,30 @@ newSessionModal.addEventListener('click', (e) => {
   }
 });
 
+closeSessionRenameModalBtn.addEventListener('click', closeSessionRenameModal);
+cancelSessionRenameBtn.addEventListener('click', closeSessionRenameModal);
+saveSessionRenameBtn.addEventListener('click', saveSessionRename);
+
+sessionRenameModal.addEventListener('click', (e) => {
+  if (e.target === sessionRenameModal) {
+    closeSessionRenameModal();
+  }
+});
+
+sessionRenameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    saveSessionRename();
+  }
+});
+
+closeSessionDetailModalBtn.addEventListener('click', closeSessionDetailModal);
+
+sessionDetailModal.addEventListener('click', (e) => {
+  if (e.target === sessionDetailModal) {
+    closeSessionDetailModal();
+  }
+});
+
 projectDirInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     createSessionFromModal();
@@ -782,9 +1024,17 @@ sessionNameInput.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && newSessionModal.style.display !== 'none') {
+  if (e.key !== 'Escape') return;
+  if (newSessionModal.style.display !== 'none') {
     closeNewSessionModal();
   }
+  if (sessionRenameModal.style.display !== 'none') {
+    closeSessionRenameModal();
+  }
+  if (sessionDetailModal.style.display !== 'none') {
+    closeSessionDetailModal();
+  }
+  closeSessionContextMenu();
 });
 
 chatHeader.addEventListener('click', () => {

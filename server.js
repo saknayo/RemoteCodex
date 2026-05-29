@@ -147,13 +147,51 @@ app.put('/api/sessions/:id/title', verifyToken, requireAuth, (req, res) => {
   const session = loadSession(req.params.id);
 
   if (session) {
-    session.title = title;
+    session.title = normalizeSessionTitle(title);
+    session.customTitle = true;
     session.updatedAt = new Date().toISOString();
     saveSession(session);
-    res.json({ success: true });
+    res.json(session);
   } else {
     res.status(404).json({ error: 'Session not found' });
   }
+});
+
+app.post('/api/sessions/:id/copy', verifyToken, requireAuth, (req, res) => {
+  const source = loadSession(req.params.id);
+
+  if (!source) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  let projectDir;
+  try {
+    projectDir = normalizeProjectDir(source.projectDir);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+    return;
+  }
+
+  const provider = getProvider(source.provider);
+  const now = new Date().toISOString();
+  const copiedTitle = normalizeSessionTitle(`${source.title || 'Untitled'} copy`);
+  const session = {
+    id: uuidv4(),
+    cliSessionId: uuidv4(),
+    provider: provider.id,
+    assistantName: provider.assistantName,
+    projectDir,
+    title: copiedTitle,
+    customTitle: true,
+    codexThreadReady: provider.id === 'codex' ? false : undefined,
+    createdAt: now,
+    updatedAt: now,
+    messages: []
+  };
+
+  saveSession(session);
+  res.status(201).json(session);
 });
 
 io.use((socket, next) => {

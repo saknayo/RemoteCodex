@@ -229,6 +229,7 @@ header {
   border-bottom: 1px solid var(--border);
   height: 56px;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .nav-tabs {
@@ -355,6 +356,9 @@ header {
   position: relative;
   overflow: hidden;
   min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .session-item-content {
@@ -420,6 +424,60 @@ header {
 .session-item-separator {
   color: var(--border);
   flex: 0 0 auto;
+}
+
+.session-context-menu {
+  position: fixed;
+  min-width: 148px;
+  padding: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  z-index: 1200;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.session-context-menu button {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-context-menu button:hover {
+  background: var(--bg-surface-elevated);
+}
+
+.action-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--text-primary);
+  color: white;
+  box-shadow: var(--shadow-lg);
+  z-index: 1300;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.action-toast.success {
+  background: var(--success);
+}
+
+.action-toast.error {
+  background: var(--error);
 }
 
 /* === Chat Area === */
@@ -1063,6 +1121,15 @@ header {
     padding: 0 var(--spacing-md);
   }
 
+  .session-detail-list {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .session-detail-list dd {
+    margin-bottom: 8px;
+  }
+
   .icon-btn {
     display: block !important;
   }
@@ -1139,4 +1206,31 @@ header {
 #create-session-btn {
   background: var(--accent);
   color: white;
+}
+
+#save-session-rename-btn {
+  background: var(--accent);
+  color: white;
+}
+
+.session-detail-modal {
+  width: min(560px, 100%);
+}
+
+.session-detail-list {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 10px 12px;
+  font-size: 0.875rem;
+}
+
+.session-detail-list dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.session-detail-list dd {
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }

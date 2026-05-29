@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Remote Codex</title>
-  <link rel="stylesheet" href="/style.css?v=64">
+  <link rel="stylesheet" href="/style.css?v=69">
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -93,9 +93,36 @@
           </div>
         </div>
       </div>
+
+      <div id="session-rename-modal" class="modal-overlay" style="display: none;">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>Rename Session</h2>
+            <button id="close-session-rename-modal" class="icon-btn" aria-label="Close">×</button>
+          </div>
+          <div class="modal-field">
+            <label for="session-rename-input">Session Name</label>
+            <input id="session-rename-input" type="text" placeholder="Session name">
+          </div>
+          <div class="modal-actions">
+            <button id="cancel-session-rename-btn" type="button">Cancel</button>
+            <button id="save-session-rename-btn" type="button">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="session-detail-modal" class="modal-overlay" style="display: none;">
+        <div class="modal session-detail-modal">
+          <div class="modal-header">
+            <h2>Session Details</h2>
+            <button id="close-session-detail-modal" class="icon-btn" aria-label="Close">×</button>
+          </div>
+          <dl id="session-detail-list" class="session-detail-list"></dl>
+        </div>
+      </div>
     </div>
   </div>
 
-  <script src="/app.js?v=66"></script>
+  <script src="/app.js?v=68"></script>
 </body>
 </html>
