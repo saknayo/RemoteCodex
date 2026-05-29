@@ -43,6 +43,7 @@ if (!fs.existsSync(SESSIONS_DIR)) {
 password.initializeDefaultUser();
 
 const activeProcesses = new Map();
+const socketProcesses = new Map();
 
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
@@ -97,6 +98,26 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
     ? ['-p', content, '--session-id', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
     : ['-p', content, '--resume', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   return { command: provider.path, args };
+}
+
+function getProcessKey(socketId, targetSessionId) {
+  return `${socketId}:${targetSessionId}`;
+}
+
+function trackSocketProcess(socketId, key) {
+  if (!socketProcesses.has(socketId)) {
+    socketProcesses.set(socketId, new Set());
+  }
+  socketProcesses.get(socketId).add(key);
+}
+
+function untrackSocketProcess(socketId, key) {
+  const keys = socketProcesses.get(socketId);
+  if (!keys) return;
+  keys.delete(key);
+  if (keys.size === 0) {
+    socketProcesses.delete(socketId);
+  }
 }
 
 app.get('/api/sessions', verifyToken, requireAuth, (req, res) => {
@@ -207,7 +228,10 @@ io.on('connection', (socket) => {
     currentSession = loadSession(id);
 
     if (currentSession) {
-      socket.emit('session_loaded', currentSession);
+      socket.emit('session_loaded', {
+        ...currentSession,
+        isStreaming: activeProcesses.has(getProcessKey(socket.id, currentSession.id))
+      });
     }
   });
 
@@ -241,35 +265,42 @@ io.on('connection', (socket) => {
   socket.on('send_message', async (payload) => {
     const content = typeof payload === 'string' ? payload : payload?.content;
     if (!content) return;
-    if (!currentSession && payload?.sessionId) {
-      sessionId = payload.sessionId;
-      currentSession = loadSession(sessionId);
+    const targetSessionId = payload?.sessionId || sessionId;
+    let streamSession = targetSessionId ? loadSession(targetSessionId) : currentSession;
+    if (streamSession) {
+      sessionId = streamSession.id;
+      currentSession = streamSession;
     }
-    if (!currentSession) {
-      socket.emit('stream_error', 'Session is not loaded. Please select the session again.');
+    if (!streamSession) {
+      socket.emit('stream_error', { sessionId: targetSessionId || null, message: 'Session is not loaded. Please select the session again.' });
       return;
     }
-    currentSession.provider = currentSession.provider || 'claude';
-    currentSession.assistantName = getProvider(currentSession.provider).assistantName;
-    currentSession.cliSessionId = currentSession.cliSessionId || uuidv4();
+    const processKey = getProcessKey(socket.id, streamSession.id);
+    if (activeProcesses.has(processKey)) {
+      socket.emit('stream_error', { sessionId: streamSession.id, message: 'This session is already streaming.' });
+      return;
+    }
+    streamSession.provider = streamSession.provider || 'claude';
+    streamSession.assistantName = getProvider(streamSession.provider).assistantName;
+    streamSession.cliSessionId = streamSession.cliSessionId || uuidv4();
     try {
-      currentSession.projectDir = normalizeProjectDir(currentSession.projectDir);
+      streamSession.projectDir = normalizeProjectDir(streamSession.projectDir);
     } catch (error) {
-      socket.emit('stream_error', error.message);
+      socket.emit('stream_error', { sessionId: streamSession.id, message: error.message });
       return;
     }
-    const provider = getProvider(currentSession.provider);
+    const provider = getProvider(streamSession.provider);
 
     const userMsg = { role: 'user', content, timestamp: new Date().toISOString() };
-    currentSession.messages.push(userMsg);
+    streamSession.messages.push(userMsg);
 
-    if (currentSession.messages.length === 1 && !currentSession.customTitle) {
-      currentSession.title = content.slice(0, 30) + (content.length > 30 ? '...' : '');
+    if (streamSession.messages.length === 1 && !streamSession.customTitle) {
+      streamSession.title = content.slice(0, 30) + (content.length > 30 ? '...' : '');
     }
 
-    currentSession.updatedAt = new Date().toISOString();
-    saveSession(currentSession);
-    socket.emit('message_added', userMsg);
+    streamSession.updatedAt = new Date().toISOString();
+    saveSession(streamSession);
+    socket.emit('message_added', { sessionId: streamSession.id, message: userMsg });
 
     const assistantMsg = {
       role: 'assistant',
@@ -277,19 +308,19 @@ io.on('connection', (socket) => {
       thinking: '',
       toolUses: [],
       durationMs: null,
-      assistantName: currentSession.assistantName,
+      assistantName: streamSession.assistantName,
       timestamp: new Date().toISOString()
     };
-    currentSession.messages.push(assistantMsg);
-    socket.emit('message_added', assistantMsg);
+    streamSession.messages.push(assistantMsg);
+    socket.emit('message_added', { sessionId: streamSession.id, message: assistantMsg });
 
     try {
-      const isFirstMessage = currentSession.messages.filter(m => m.role === 'user').length <= 1;
-      const { command, args } = buildCliCommand(provider, currentSession, content, isFirstMessage);
+      const isFirstMessage = streamSession.messages.filter(m => m.role === 'user').length <= 1;
+      const { command, args } = buildCliCommand(provider, streamSession, content, isFirstMessage);
       let processFailed = false;
       const cli = spawn(command, args, {
         env: process.env,
-        cwd: currentSession.projectDir,
+        cwd: streamSession.projectDir,
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -330,8 +361,8 @@ io.on('connection', (socket) => {
 
       function handleCodexEvent(event) {
         if (event.type === 'thread.started' && event.thread_id) {
-          currentSession.cliSessionId = event.thread_id;
-          currentSession.codexThreadReady = true;
+          streamSession.cliSessionId = event.thread_id;
+          streamSession.codexThreadReady = true;
           return;
         }
 
@@ -347,8 +378,8 @@ io.on('connection', (socket) => {
               result: (item.aggregated_output || '').substring(0, 2000)
             };
             assistantMsg.toolUses.push(tool);
-            socket.emit('stream_tool_use', { name: tool.name, input: tool.input });
-            socket.emit('stream_tool_result', { result: tool.result || '(no output)', isError: item.exit_code !== 0 });
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
+            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: tool.result || '(no output)', isError: item.exit_code !== 0 });
           } else if (item.type === 'error' && item.message) {
             codexErrors.push(item.message);
           } else if (item.type) {
@@ -357,7 +388,7 @@ io.on('connection', (socket) => {
               input: item.command ? { command: item.command } : item
             };
             assistantMsg.toolUses.push(tool);
-            socket.emit('stream_tool_use', { name: tool.name, input: tool.input });
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
           }
         }
       }
@@ -381,7 +412,7 @@ io.on('connection', (socket) => {
           const lastTool = assistantMsg.toolUses[assistantMsg.toolUses.length - 1];
           if (lastTool) {
             lastTool.result = result.substring(0, 2000);
-            socket.emit('stream_tool_result', { result: lastTool.result, isError: tr.is_error });
+            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: lastTool.result, isError: tr.is_error });
           }
           return;
         }
@@ -393,7 +424,7 @@ io.on('connection', (socket) => {
           if (block.type === 'thinking') {
             thinking = '';
             console.log('[STREAM] thinking_start');
-            socket.emit('stream_thinking_start');
+            socket.emit('stream_thinking_start', { sessionId: streamSession.id });
           } else if (block.type === 'tool_use') {
             toolInput = '';
             currentTool = { id: block.id, name: block.name };
@@ -402,11 +433,11 @@ io.on('connection', (socket) => {
           const delta = evt.delta;
           if (delta.type === 'thinking_delta') {
             thinking += delta.thinking;
-            socket.emit('stream_thinking', delta.thinking);
+            socket.emit('stream_thinking', { sessionId: streamSession.id, chunk: delta.thinking });
           } else if (delta.type === 'text_delta') {
             fullResponse += delta.text;
             if (fullResponse.length < 50) console.log('[STREAM] text_delta:', delta.text);
-            socket.emit('stream_text', delta.text);
+            socket.emit('stream_text', { sessionId: streamSession.id, text: delta.text });
           } else if (delta.type === 'input_json_delta') {
             toolInput += delta.partial_json;
           }
@@ -418,7 +449,7 @@ io.on('connection', (socket) => {
             } catch (e) {
               input = { raw: toolInput };
             }
-            socket.emit('stream_tool_use', { name: currentTool.name, input });
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: currentTool.name, input });
             assistantMsg.toolUses.push({ name: currentTool.name, input });
             currentTool = null;
             toolInput = '';
@@ -438,10 +469,11 @@ io.on('connection', (socket) => {
         processFailed = true;
         assistantMsg.content = `Failed to start ${provider.assistantName}: ${error.message}`;
         assistantMsg.durationMs = Date.now() - requestStartedAt;
-        currentSession.updatedAt = new Date().toISOString();
-        saveSession(currentSession);
-        socket.emit('stream_error', assistantMsg.content);
-        activeProcesses.delete(socket.id);
+        streamSession.updatedAt = new Date().toISOString();
+        saveSession(streamSession);
+        socket.emit('stream_error', { sessionId: streamSession.id, message: assistantMsg.content });
+        activeProcesses.delete(processKey);
+        untrackSocketProcess(socket.id, processKey);
       });
 
       cli.on('close', (code) => {
@@ -452,9 +484,10 @@ io.on('connection', (socket) => {
         const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
-        currentSession.updatedAt = new Date().toISOString();
-        saveSession(currentSession);
+        streamSession.updatedAt = new Date().toISOString();
+        saveSession(streamSession);
         socket.emit('stream_end', {
+          sessionId: streamSession.id,
           code,
           content: assistantMsg.content,
           thinking: assistantMsg.thinking,
@@ -462,29 +495,37 @@ io.on('connection', (socket) => {
           durationMs: assistantMsg.durationMs,
           assistantName: assistantMsg.assistantName
         });
-        activeProcesses.delete(socket.id);
+        activeProcesses.delete(processKey);
+        untrackSocketProcess(socket.id, processKey);
       });
 
-      activeProcesses.set(socket.id, cli);
+      activeProcesses.set(processKey, cli);
+      trackSocketProcess(socket.id, processKey);
 
     } catch (error) {
-      socket.emit('stream_error', error.message);
+      socket.emit('stream_error', { sessionId: streamSession?.id || targetSessionId || null, message: error.message });
     }
   });
 
-  socket.on('interrupt', () => {
-    const cli = activeProcesses.get(socket.id);
+  socket.on('interrupt', (payload = {}) => {
+    const targetSessionId = payload?.sessionId || sessionId;
+    const key = targetSessionId ? getProcessKey(socket.id, targetSessionId) : null;
+    const cli = key ? activeProcesses.get(key) : null;
     if (cli) {
       cli.kill('SIGINT');
     }
   });
 
   socket.on('disconnect', () => {
-    const cli = activeProcesses.get(socket.id);
-    if (cli) {
-      cli.kill();
+    const keys = socketProcesses.get(socket.id) || new Set();
+    for (const key of keys) {
+      const cli = activeProcesses.get(key);
+      if (cli) {
+        cli.kill();
+      }
+      activeProcesses.delete(key);
     }
-    activeProcesses.delete(socket.id);
+    socketProcesses.delete(socket.id);
   });
 });
 

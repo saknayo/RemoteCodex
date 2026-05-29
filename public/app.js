@@ -2,7 +2,7 @@ const API_BASE = '/api';
 let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
-let isStreaming = false;
+const streamingSessions = new Map();
 
 // 流式渲染用的 DOM 引用
 let streamingBubble = null;
@@ -49,6 +49,52 @@ let sessionContextMenu = null;
 let sessionMenuCloseHandler = null;
 let selectedSessionForAction = null;
 let actionToastTimer = null;
+
+function getCurrentSessionId() {
+  return currentSession?.id || null;
+}
+
+function getStreamingState(sessionId) {
+  if (!sessionId) return null;
+  return streamingSessions.get(sessionId) || null;
+}
+
+function ensureStreamingState(sessionId, assistantMsg = null) {
+  if (!sessionId) return null;
+  let state = streamingSessions.get(sessionId);
+  if (!state) {
+    state = {
+      assistantMsg: assistantMsg || null,
+      thinking: '',
+      text: '',
+      toolUses: [],
+      hasThinking: false
+    };
+    streamingSessions.set(sessionId, state);
+  } else if (assistantMsg) {
+    state.assistantMsg = assistantMsg;
+  }
+  return state;
+}
+
+function isSessionStreaming(sessionId = getCurrentSessionId()) {
+  return Boolean(sessionId && streamingSessions.has(sessionId));
+}
+
+function updateSendButton() {
+  const streaming = isSessionStreaming();
+  sendBtn.textContent = streaming ? 'Sending...' : 'Send';
+  sendBtn.disabled = streaming;
+  interruptBtn.style.display = streaming ? 'inline-block' : 'none';
+}
+
+function clearStreamingDomRefs() {
+  streamingBubble = null;
+  thinkingEl = null;
+  toolUseEl = null;
+  textContentEl = null;
+  hasThinking = false;
+}
 
 function setMainTab(tab) {
   const showSessions = tab === 'sessions';
@@ -298,7 +344,7 @@ function scrollToBottom() {
 }
 
 // 创建 assistant 气泡的骨架（thinking + toolUse + content 区域）
-function createAssistantSkeleton(msg = null) {
+function createAssistantSkeleton(msg = null, state = null) {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble assistant';
 
@@ -311,19 +357,26 @@ function createAssistantSkeleton(msg = null) {
   thinkingEl = document.createElement('div');
   thinkingEl.className = 'thinking-block collapsed';
   thinkingEl.innerHTML = '<div class="thinking-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">▶ 思考过程</div><div class="thinking-content"></div>';
-  thinkingEl.style.display = 'none';
+  thinkingEl.style.display = state?.thinking ? 'block' : 'none';
+  if (state?.thinking) {
+    thinkingEl.querySelector('.thinking-content').textContent = state.thinking;
+  }
   body.appendChild(thinkingEl);
 
   // tool use 区域（默认隐藏）
   toolUseEl = document.createElement('div');
   toolUseEl.className = 'tool-use-area';
-  toolUseEl.style.display = 'none';
+  toolUseEl.style.display = state?.toolUses?.length ? 'block' : 'none';
+  for (const tool of state?.toolUses || []) {
+    toolUseEl.appendChild(createToolUseItem(tool));
+  }
   body.appendChild(toolUseEl);
 
   // 文本内容区域
   textContentEl = document.createElement('div');
   textContentEl.className = 'message-content';
-  textContentEl.style.display = 'none';
+  textContentEl.style.display = state?.text ? 'block' : 'none';
+  textContentEl.textContent = state?.text || '';
   body.appendChild(textContentEl);
 
   bubble.appendChild(body);
@@ -386,28 +439,30 @@ function connectSocket() {
     }
   });
 
-  function resetStreamingState(message = null) {
-    if (message && textContentEl) {
+  function isCurrentStreamSession(sessionId) {
+    return Boolean(sessionId && currentSession?.id === sessionId);
+  }
+
+  function resetStreamingState(sessionId = getCurrentSessionId(), message = null) {
+    if (!sessionId) return;
+    if (message && isCurrentStreamSession(sessionId) && textContentEl) {
       textContentEl.style.display = 'block';
       textContentEl.textContent = message;
     }
-    streamingBubble = null;
-    thinkingEl = null;
-    toolUseEl = null;
-    textContentEl = null;
-    isStreaming = false;
-    sendBtn.textContent = 'Send';
-    sendBtn.disabled = false;
-    interruptBtn.style.display = 'none';
-    if (message) {
+    streamingSessions.delete(sessionId);
+    if (isCurrentStreamSession(sessionId)) {
+      clearStreamingDomRefs();
+      updateSendButton();
+    }
+    if (message && isCurrentStreamSession(sessionId)) {
       renderMessages();
     }
   }
 
   socket.on('connect_error', (error) => {
     console.error('Socket error:', error);
-    if (isStreaming) {
-      resetStreamingState(error.message || 'Connection failed.');
+    if (currentSession?.id && isSessionStreaming(currentSession.id)) {
+      resetStreamingState(currentSession.id, error.message || 'Connection failed.');
     }
     if (error.message === 'Invalid token' || error.message === 'Missing token') {
       localStorage.removeItem('token');
@@ -417,16 +472,22 @@ function connectSocket() {
   });
 
   socket.on('disconnect', () => {
-    if (isStreaming) {
-      resetStreamingState('Connection lost. Please resend your message.');
+    if (currentSession?.id && isSessionStreaming(currentSession.id)) {
+      resetStreamingState(currentSession.id, 'Connection lost. Please resend your message.');
     }
+    streamingSessions.clear();
+    updateSendButton();
   });
 
   socket.on('session_loaded', (session) => {
+    if (session.isStreaming && !streamingSessions.has(session.id)) {
+      ensureStreamingState(session.id);
+    }
     currentSession = session;
     renderSession();
     highlightSession(session.id);
     setMainTab('conversation');
+    updateSendButton();
   });
 
   socket.on('session_created', (session) => {
@@ -435,6 +496,7 @@ function connectSocket() {
     loadSessions();
     highlightSession(session.id);
     setMainTab('conversation');
+    updateSendButton();
   });
 
   socket.on('session_error', (message) => {
@@ -443,43 +505,70 @@ function connectSocket() {
   });
 
   socket.on('message_added', (msg) => {
+    const sessionId = msg?.sessionId || currentSession?.id;
+    const message = msg?.message || msg;
+    if (!sessionId || !message) return;
+    if (message.role === 'assistant' && isSessionStreaming(sessionId)) {
+      ensureStreamingState(sessionId, message);
+    }
+    if (!isCurrentStreamSession(sessionId)) return;
     if (!currentSession) return;
-    currentSession.messages.push(msg);
+    currentSession.messages.push(message);
     // user 消息正常渲染
-    if (msg.role === 'user') {
+    if (message.role === 'user') {
       renderMessages();
     }
     // assistant 空消息：创建流式骨架
-    if (msg.role === 'assistant' && isStreaming) {
-      createAssistantSkeleton(msg);
+    if (message.role === 'assistant' && isSessionStreaming(sessionId)) {
+      createAssistantSkeleton(message, getStreamingState(sessionId));
       hasThinking = false;
     }
   });
 
-  socket.on('stream_thinking_start', () => {
-    if (!thinkingEl) return;
+  socket.on('stream_thinking_start', (data = {}) => {
+    const sessionId = data.sessionId || currentSession?.id;
+    const state = ensureStreamingState(sessionId);
+    if (state) state.hasThinking = true;
+    if (!isCurrentStreamSession(sessionId) || !thinkingEl) return;
     thinkingEl.style.display = 'block';
     thinkingEl.classList.remove('collapsed');
     hasThinking = true;
   });
 
-  socket.on('stream_thinking', (chunk) => {
-    if (!thinkingEl) return;
+  socket.on('stream_thinking', (data) => {
+    const sessionId = data?.sessionId || currentSession?.id;
+    const chunk = typeof data === 'string' ? data : data?.chunk;
+    if (!chunk) return;
+    const state = ensureStreamingState(sessionId);
+    if (state) state.thinking += chunk;
+    if (!isCurrentStreamSession(sessionId) || !thinkingEl) return;
     const contentEl = thinkingEl.querySelector('.thinking-content');
     contentEl.textContent += chunk;
     scrollToBottom();
   });
 
   socket.on('stream_tool_use', (tool) => {
-    if (!toolUseEl) return;
+    const sessionId = tool?.sessionId || currentSession?.id;
+    const cleanTool = { ...tool };
+    delete cleanTool.sessionId;
+    const state = ensureStreamingState(sessionId);
+    if (state) state.toolUses.push(cleanTool);
+    if (!isCurrentStreamSession(sessionId) || !toolUseEl) return;
     toolUseEl.style.display = 'block';
-    const item = createToolUseItem(tool);
+    const item = createToolUseItem(cleanTool);
     toolUseEl.appendChild(item);
     scrollToBottom();
   });
 
   socket.on('stream_tool_result', (data) => {
-    if (!toolUseEl) return;
+    const sessionId = data?.sessionId || currentSession?.id;
+    const state = getStreamingState(sessionId);
+    if (state?.toolUses?.length) {
+      const lastTool = state.toolUses[state.toolUses.length - 1];
+      lastTool.result = data.result || '(no output)';
+      lastTool.isError = data.isError;
+    }
+    if (!isCurrentStreamSession(sessionId) || !toolUseEl) return;
     const lastItem = toolUseEl.lastElementChild;
     if (!lastItem) return;
     const resultEl = document.createElement('pre');
@@ -490,17 +579,23 @@ function connectSocket() {
     scrollToBottom();
   });
 
-  socket.on('stream_text', (text) => {
-    if (!textContentEl) return;
+  socket.on('stream_text', (data) => {
+    const sessionId = data?.sessionId || currentSession?.id;
+    const text = typeof data === 'string' ? data : data?.text;
+    if (!text) return;
+    const state = ensureStreamingState(sessionId);
+    if (state) state.text += text;
+    if (!isCurrentStreamSession(sessionId) || !textContentEl) return;
     textContentEl.style.display = 'block';
     textContentEl.textContent += text;
     scrollToBottom();
   });
 
   socket.on('stream_end', (data) => {
+    const sessionId = data?.sessionId || currentSession?.id;
     const content = data?.content || '';
     // 更新数据
-    if (currentSession && currentSession.messages.length > 0) {
+    if (isCurrentStreamSession(sessionId) && currentSession && currentSession.messages.length > 0) {
       const lastMsg = currentSession.messages[currentSession.messages.length - 1];
       if (lastMsg.role === 'assistant') {
         lastMsg.content = content;
@@ -511,26 +606,31 @@ function connectSocket() {
       }
     }
     // 清理流式状态
-    resetStreamingState();
+    resetStreamingState(sessionId);
     // 最终渲染（Markdown + 保存的 thinking/tool 数据）
-    renderMessages();
+    if (isCurrentStreamSession(sessionId)) {
+      renderMessages();
+    }
     loadSessions();
   });
 
   socket.on('stream_error', (error) => {
-    const message = error || 'Assistant failed to respond.';
-    if (textContentEl) {
+    const sessionId = error?.sessionId || currentSession?.id;
+    const message = (typeof error === 'string' ? error : error?.message) || 'Assistant failed to respond.';
+    if (isCurrentStreamSession(sessionId) && textContentEl) {
       textContentEl.style.display = 'block';
       textContentEl.textContent = message;
     }
-    if (currentSession && currentSession.messages.length > 0) {
+    if (isCurrentStreamSession(sessionId) && currentSession && currentSession.messages.length > 0) {
       const lastMsg = currentSession.messages[currentSession.messages.length - 1];
       if (lastMsg.role === 'assistant') {
         lastMsg.content = message;
       }
     }
-    resetStreamingState();
-    renderMessages();
+    resetStreamingState(sessionId);
+    if (isCurrentStreamSession(sessionId)) {
+      renderMessages();
+    }
   });
 }
 
@@ -549,6 +649,7 @@ function showMainView() {
   setMainTab('conversation');
   connectSocket();
   loadSessions();
+  updateSendButton();
 }
 
 function renderSession() {
@@ -567,6 +668,7 @@ function renderSession() {
     selectButton.addEventListener('click', () => setMainTab('sessions'));
     emptyState.appendChild(selectButton);
     messagesContainer.appendChild(emptyState);
+    updateSendButton();
     return;
   }
 
@@ -574,6 +676,7 @@ function renderSession() {
   sessionTitle.textContent = currentSession.title || 'Untitled';
   sessionTitle.title = `${currentSession.assistantName || 'Claude'} · ${currentSession.projectDir || ''}`;
   renderMessages();
+  updateSendButton();
 }
 
 function showSessionLoading(session) {
@@ -588,18 +691,32 @@ function showSessionLoading(session) {
   sessionTitle.textContent = currentSession.title;
   sessionTitle.title = `${currentSession.assistantName} · ${currentSession.projectDir}`;
   messagesContainer.innerHTML = '';
+  clearStreamingDomRefs();
   const loading = document.createElement('div');
   loading.className = 'session-loading-state';
   loading.textContent = 'Loading session...';
   messagesContainer.appendChild(loading);
+  updateSendButton();
 }
 
 function renderMessages() {
   if (!currentSession) return;
 
   messagesContainer.innerHTML = '';
+  clearStreamingDomRefs();
+  const streamingState = getStreamingState(currentSession.id);
 
-  for (const msg of currentSession.messages) {
+  for (let index = 0; index < currentSession.messages.length; index++) {
+    const msg = currentSession.messages[index];
+    const isStreamingPlaceholder = Boolean(
+      streamingState &&
+      msg.role === 'assistant' &&
+      !msg.content &&
+      index === currentSession.messages.length - 1
+    );
+    if (isStreamingPlaceholder) {
+      continue;
+    }
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${msg.role}`;
 
@@ -648,6 +765,10 @@ function renderMessages() {
     }
 
     messagesContainer.appendChild(bubble);
+  }
+
+  if (streamingState?.assistantMsg) {
+    createAssistantSkeleton(streamingState.assistantMsg, streamingState);
   }
 
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -780,12 +901,14 @@ function renderSessionList(sessions) {
       highlightSession(session.id);
       setMainTab('conversation');
       if (currentSession?.id === session.id) {
+        updateSendButton();
         return;
       }
       showSessionLoading(session);
       if (socket) {
         socket.emit('load_session', session.id);
       }
+      updateSendButton();
     });
 
     sessionList.appendChild(li);
@@ -951,7 +1074,8 @@ chatHeader.addEventListener('click', () => {
 
 sendBtn.addEventListener('click', () => {
   const content = messageInput.value.trim();
-  if (!content || isStreaming) return;
+  const sessionId = currentSession?.id;
+  if (!content || !sessionId || isSessionStreaming(sessionId)) return;
   if (!socket || !socket.connected) {
     renderSession();
     return;
@@ -960,20 +1084,18 @@ sendBtn.addEventListener('click', () => {
   messageInput.value = '';
   messageInput.style.height = 'auto';
 
-  isStreaming = true;
-  sendBtn.textContent = 'Sending...';
-  sendBtn.disabled = true;
-  interruptBtn.style.display = 'inline-block';
+  ensureStreamingState(sessionId);
+  updateSendButton();
 
   socket.emit('send_message', {
-    sessionId: currentSession?.id,
+    sessionId,
     content
   });
 });
 
 interruptBtn.addEventListener('click', () => {
   if (socket) {
-    socket.emit('interrupt');
+    socket.emit('interrupt', { sessionId: currentSession?.id });
   }
 });
 
