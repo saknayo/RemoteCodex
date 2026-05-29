@@ -242,12 +242,45 @@ function connectSocket() {
     auth: { token }
   });
 
+  socket.on('connect', () => {
+    if (currentSession?.id) {
+      socket.emit('load_session', currentSession.id);
+    }
+  });
+
+  function resetStreamingState(message = null) {
+    if (message && textContentEl) {
+      textContentEl.style.display = 'block';
+      textContentEl.textContent = message;
+    }
+    streamingBubble = null;
+    thinkingEl = null;
+    toolUseEl = null;
+    textContentEl = null;
+    isStreaming = false;
+    sendBtn.textContent = 'Send';
+    sendBtn.disabled = false;
+    interruptBtn.style.display = 'none';
+    if (message) {
+      renderMessages();
+    }
+  }
+
   socket.on('connect_error', (error) => {
     console.error('Socket error:', error);
+    if (isStreaming) {
+      resetStreamingState(error.message || 'Connection failed.');
+    }
     if (error.message === 'Invalid token' || error.message === 'Missing token') {
       localStorage.removeItem('token');
       token = null;
       showLoginView();
+    }
+  });
+
+  socket.on('disconnect', () => {
+    if (isStreaming) {
+      resetStreamingState('Connection lost. Please resend your message.');
     }
   });
 
@@ -340,14 +373,7 @@ function connectSocket() {
       }
     }
     // 清理流式状态
-    streamingBubble = null;
-    thinkingEl = null;
-    toolUseEl = null;
-    textContentEl = null;
-    isStreaming = false;
-    sendBtn.textContent = 'Send';
-    sendBtn.disabled = false;
-    interruptBtn.style.display = 'none';
+    resetStreamingState();
     // 最终渲染（Markdown + 保存的 thinking/tool 数据）
     renderMessages();
     loadSessions();
@@ -365,14 +391,7 @@ function connectSocket() {
         lastMsg.content = message;
       }
     }
-    streamingBubble = null;
-    thinkingEl = null;
-    toolUseEl = null;
-    textContentEl = null;
-    isStreaming = false;
-    sendBtn.textContent = 'Send';
-    sendBtn.disabled = false;
-    interruptBtn.style.display = 'none';
+    resetStreamingState();
     renderMessages();
   });
 }
@@ -777,7 +796,11 @@ chatHeader.addEventListener('click', () => {
 
 sendBtn.addEventListener('click', () => {
   const content = messageInput.value.trim();
-  if (!content || !socket || isStreaming) return;
+  if (!content || isStreaming) return;
+  if (!socket || !socket.connected) {
+    renderSession();
+    return;
+  }
 
   messageInput.value = '';
   messageInput.style.height = 'auto';
@@ -787,7 +810,10 @@ sendBtn.addEventListener('click', () => {
   sendBtn.disabled = true;
   interruptBtn.style.display = 'inline-block';
 
-  socket.emit('send_message', content);
+  socket.emit('send_message', {
+    sessionId: currentSession?.id,
+    content
+  });
 });
 
 interruptBtn.addEventListener('click', () => {

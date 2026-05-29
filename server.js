@@ -200,8 +200,17 @@ io.on('connection', (socket) => {
     socket.emit('session_created', currentSession);
   });
 
-  socket.on('send_message', async (content) => {
-    if (!currentSession) return;
+  socket.on('send_message', async (payload) => {
+    const content = typeof payload === 'string' ? payload : payload?.content;
+    if (!content) return;
+    if (!currentSession && payload?.sessionId) {
+      sessionId = payload.sessionId;
+      currentSession = loadSession(sessionId);
+    }
+    if (!currentSession) {
+      socket.emit('stream_error', 'Session is not loaded. Please select the session again.');
+      return;
+    }
     currentSession.provider = currentSession.provider || 'claude';
     currentSession.assistantName = getProvider(currentSession.provider).assistantName;
     currentSession.cliSessionId = currentSession.cliSessionId || uuidv4();
