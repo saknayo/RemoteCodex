@@ -354,53 +354,98 @@ header {
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   min-width: 0;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-surface);
+}
+
+.session-item:hover {
+  background: var(--bg-surface-elevated);
+}
+
+.session-item.active {
+  background: var(--accent-light);
 }
 
 .session-item-content {
   height: 100%;
-  padding: 0 var(--spacing-lg);
-  background: var(--bg-surface);
+  padding: 0 8px 0 var(--spacing-lg);
+  background: transparent;
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1 1 auto;
   position: relative;
   z-index: 1;
-  transition: transform 0.18s ease, background 0.15s ease;
+  transition: background 0.15s ease;
 }
 
 .session-item:hover .session-item-content {
-  background: var(--bg-surface-elevated);
+  background: transparent;
 }
 
 .session-item.active .session-item-content {
-  background: var(--accent-light);
+  background: transparent;
   border-left: 3px solid var(--accent);
 }
 
-.session-item.show-delete .session-item-content {
-  transform: translateX(-72px);
-}
-
-.session-delete-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 72px;
+.session-menu-btn {
+  flex: 0 0 36px;
+  width: 36px;
   height: 100%;
   border: none;
   border-radius: 0;
-  background: var(--error);
-  color: white;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  background: transparent !important;
+  color: inherit;
   cursor: pointer;
-  z-index: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 0;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.session-menu-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(201, 100, 66, 0.12);
+  display: block;
+  flex: 0 0 auto;
+  opacity: 0.84;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.session-menu-btn:hover,
+.session-menu-btn:focus-visible,
+.session-menu-btn:active {
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.session-menu-btn:hover .session-menu-dot,
+.session-menu-btn:focus-visible .session-menu-dot {
+  opacity: 1;
+  transform: scale(1.16);
+}
+
+.session-menu-btn:focus-visible {
+  outline: none;
+}
+
+.session-menu-btn:active .session-menu-dot {
+  opacity: 1;
+  transform: scale(1.35);
 }
 
 .session-item-title {
@@ -454,6 +499,10 @@ header {
 
 .session-context-menu button:hover {
   background: var(--bg-surface-elevated);
+}
+
+.session-context-menu button.danger {
+  color: var(--error);
 }
 
 .action-toast {

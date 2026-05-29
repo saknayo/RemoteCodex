@@ -45,12 +45,9 @@ const sessionDetailList = document.getElementById('session-detail-list');
 const closeSessionDetailModalBtn = document.getElementById('close-session-detail-modal');
 
 let isNavVisible = true;
-let openSessionActionItem = null;
 let sessionContextMenu = null;
 let sessionMenuCloseHandler = null;
 let selectedSessionForAction = null;
-let longPressTimer = null;
-let suppressNextSessionClick = false;
 let actionToastTimer = null;
 
 function setMainTab(tab) {
@@ -231,6 +228,21 @@ async function copySessionConfig(session) {
   } catch (error) {
     console.error('Failed to copy session:', error);
     showActionToast('Copy failed', 'error');
+  }
+}
+
+async function deleteSession(session) {
+  try {
+    await apiFetch(`${API_BASE}/sessions/${session.id}`, { method: 'DELETE' });
+    if (currentSession?.id === session.id) {
+      currentSession = null;
+      renderSession();
+    }
+    await loadSessions();
+    showActionToast('Session deleted', 'success');
+  } catch (error) {
+    console.error('Failed to delete session:', error);
+    showActionToast('Delete failed', 'error');
   }
 }
 
@@ -651,10 +663,13 @@ function closeSessionContextMenu() {
   }
 }
 
-function createSessionMenuButton(label, action) {
+function createSessionMenuButton(label, action, options = {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = label;
+  if (options.danger) {
+    button.classList.add('danger');
+  }
   button.addEventListener('click', async (e) => {
     e.stopPropagation();
     closeSessionContextMenu();
@@ -672,6 +687,7 @@ function openSessionContextMenu(session, x, y) {
   sessionContextMenu.appendChild(createSessionMenuButton('Rename', () => openSessionRenameModal(session)));
   sessionContextMenu.appendChild(createSessionMenuButton('Details', () => openSessionDetailModal(session)));
   sessionContextMenu.appendChild(createSessionMenuButton('Copy Session', () => copySessionConfig(session)));
+  sessionContextMenu.appendChild(createSessionMenuButton('Delete', () => deleteSession(session), { danger: true }));
   document.body.appendChild(sessionContextMenu);
 
   const menuRect = sessionContextMenu.getBoundingClientRect();
@@ -692,16 +708,8 @@ function openSessionContextMenu(session, x, y) {
   }, 0);
 }
 
-function clearLongPressTimer() {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer);
-    longPressTimer = null;
-  }
-}
-
 function renderSessionList(sessions) {
   sessionList.innerHTML = '';
-  openSessionActionItem = null;
 
   for (const session of sessions) {
     const li = document.createElement('li');
@@ -732,152 +740,25 @@ function renderSessionList(sessions) {
     content.appendChild(separator);
     content.appendChild(title);
 
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'session-delete-btn';
-    deleteBtn.textContent = '删除';
+    const menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'session-menu-btn';
+    menuBtn.setAttribute('aria-label', 'Session actions');
+    const menuDot = document.createElement('span');
+    menuDot.className = 'session-menu-dot';
+    menuBtn.appendChild(menuDot);
 
-    li.appendChild(deleteBtn);
     li.appendChild(content);
+    li.appendChild(menuBtn);
 
-    let startX = 0;
-    let startY = 0;
-    let swipeStarted = false;
-    let didSwipe = false;
-
-    const closeItem = () => {
-      li.classList.remove('show-delete');
-      if (openSessionActionItem === li) {
-        openSessionActionItem = null;
-      }
-    };
-
-    const openItem = () => {
-      if (openSessionActionItem && openSessionActionItem !== li) {
-        openSessionActionItem.classList.remove('show-delete');
-      }
-      li.classList.add('show-delete');
-      openSessionActionItem = li;
-    };
-
-    li.addEventListener('touchstart', (e) => {
-      const touch = e.touches[0];
-      startX = touch.clientX;
-      startY = touch.clientY;
-      swipeStarted = true;
-      didSwipe = false;
-      clearLongPressTimer();
-      longPressTimer = setTimeout(() => {
-        suppressNextSessionClick = true;
-        swipeStarted = false;
-        openSessionContextMenu(session, touch.clientX, touch.clientY);
-      }, 650);
-    }, { passive: true });
-
-    li.addEventListener('touchmove', (e) => {
-      if (!swipeStarted) return;
-      const touch = e.touches[0];
-      const deltaX = touch.clientX - startX;
-      const deltaY = touch.clientY - startY;
-      if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
-        clearLongPressTimer();
-      }
-      if (Math.abs(deltaY) > Math.abs(deltaX)) return;
-      if (deltaX < -30) {
-        openItem();
-        didSwipe = true;
-      } else if (deltaX > 30) {
-        closeItem();
-        didSwipe = true;
-      }
-    }, { passive: true });
-
-    li.addEventListener('touchend', () => {
-      clearLongPressTimer();
-      swipeStarted = false;
-      setTimeout(() => {
-        didSwipe = false;
-        suppressNextSessionClick = false;
-      }, 250);
-    });
-
-    li.addEventListener('touchcancel', () => {
-      clearLongPressTimer();
-      swipeStarted = false;
-      suppressNextSessionClick = false;
-    });
-
-    li.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch' || e.button !== 0) return;
-      startX = e.clientX;
-      startY = e.clientY;
-      swipeStarted = true;
-      didSwipe = false;
-    });
-
-    li.addEventListener('pointermove', (e) => {
-      if (!swipeStarted || e.pointerType === 'touch') return;
-      const deltaX = e.clientX - startX;
-      const deltaY = e.clientY - startY;
-      if (Math.abs(deltaY) > Math.abs(deltaX)) return;
-      if (deltaX < -30) {
-        openItem();
-        didSwipe = true;
-      } else if (deltaX > 30) {
-        closeItem();
-        didSwipe = true;
-      }
-    });
-
-    li.addEventListener('pointerup', () => {
-      swipeStarted = false;
-      setTimeout(() => {
-        didSwipe = false;
-      }, 250);
-    });
-
-    li.addEventListener('pointerleave', () => {
-      swipeStarted = false;
-    });
-
-    li.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      suppressNextSessionClick = true;
-      openSessionContextMenu(session, e.clientX, e.clientY);
-      setTimeout(() => {
-        suppressNextSessionClick = false;
-      }, 250);
-    });
-
-    deleteBtn.addEventListener('click', async (e) => {
+    menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      try {
-        await apiFetch(`${API_BASE}/sessions/${session.id}`, { method: 'DELETE' });
-        if (currentSession?.id === session.id) {
-          currentSession = null;
-          renderSession();
-        }
-        await loadSessions();
-      } catch (error) {
-        console.error('Failed to delete session:', error);
-      }
+      const rect = menuBtn.getBoundingClientRect();
+      openSessionContextMenu(session, rect.left, rect.bottom + 4);
     });
 
     li.addEventListener('click', () => {
-      if (suppressNextSessionClick) {
-        suppressNextSessionClick = false;
-        return;
-      }
-      if (didSwipe) return;
-      if (li.classList.contains('show-delete')) {
-        closeItem();
-        return;
-      }
       closeSessionContextMenu();
-      if (openSessionActionItem) {
-        openSessionActionItem.classList.remove('show-delete');
-        openSessionActionItem = null;
-      }
       if (socket && currentSession?.id !== session.id) {
         socket.emit('load_session', session.id);
       }
