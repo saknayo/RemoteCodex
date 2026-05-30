@@ -2,6 +2,7 @@ const API_BASE = '/api';
 let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
+let pendingSessionId = null;
 const streamingSessions = new Map();
 
 // 流式渲染用的 DOM 引用
@@ -49,6 +50,8 @@ let sessionContextMenu = null;
 let sessionMenuCloseHandler = null;
 let selectedSessionForAction = null;
 let actionToastTimer = null;
+let wakeLock = null;
+let wakeLockRequested = false;
 
 function getCurrentSessionId() {
   return currentSession?.id || null;
@@ -71,6 +74,7 @@ function ensureStreamingState(sessionId, assistantMsg = null) {
       hasThinking: false
     };
     streamingSessions.set(sessionId, state);
+    syncWakeLock();
   } else if (assistantMsg) {
     state.assistantMsg = assistantMsg;
   }
@@ -86,6 +90,40 @@ function updateSendButton() {
   sendBtn.textContent = streaming ? 'Sending...' : 'Send';
   sendBtn.disabled = streaming;
   interruptBtn.style.display = streaming ? 'inline-block' : 'none';
+}
+
+async function requestWakeLock() {
+  if (wakeLock || wakeLockRequested || !('wakeLock' in navigator)) return;
+  wakeLockRequested = true;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+    });
+  } catch (error) {
+    console.warn('Wake Lock request failed:', error);
+  } finally {
+    wakeLockRequested = false;
+  }
+}
+
+async function releaseWakeLock() {
+  const lock = wakeLock;
+  wakeLock = null;
+  if (!lock) return;
+  try {
+    await lock.release();
+  } catch (error) {
+    console.warn('Wake Lock release failed:', error);
+  }
+}
+
+function syncWakeLock() {
+  if (streamingSessions.size > 0) {
+    requestWakeLock();
+  } else {
+    releaseWakeLock();
+  }
 }
 
 function clearStreamingDomRefs() {
@@ -434,8 +472,9 @@ function connectSocket() {
   });
 
   socket.on('connect', () => {
-    if (currentSession?.id) {
-      socket.emit('load_session', currentSession.id);
+    const sessionIdToLoad = pendingSessionId || currentSession?.id;
+    if (sessionIdToLoad) {
+      socket.emit('load_session', sessionIdToLoad);
     }
   });
 
@@ -450,6 +489,7 @@ function connectSocket() {
       textContentEl.textContent = message;
     }
     streamingSessions.delete(sessionId);
+    syncWakeLock();
     if (isCurrentStreamSession(sessionId)) {
       clearStreamingDomRefs();
       updateSendButton();
@@ -476,10 +516,12 @@ function connectSocket() {
       resetStreamingState(currentSession.id, 'Connection lost. Please resend your message.');
     }
     streamingSessions.clear();
+    syncWakeLock();
     updateSendButton();
   });
 
   socket.on('session_loaded', (session) => {
+    pendingSessionId = null;
     if (session.isStreaming && !streamingSessions.has(session.id)) {
       ensureStreamingState(session.id);
     }
@@ -491,6 +533,7 @@ function connectSocket() {
   });
 
   socket.on('session_created', (session) => {
+    pendingSessionId = null;
     currentSession = session;
     renderSession();
     loadSessions();
@@ -501,6 +544,7 @@ function connectSocket() {
 
   socket.on('session_error', (message) => {
     console.error('Session error:', message);
+    pendingSessionId = null;
     sessionTitle.textContent = message || 'Failed to create session';
   });
 
@@ -637,6 +681,9 @@ function connectSocket() {
 function showLoginView() {
   loginView.style.display = 'flex';
   mainView.style.display = 'none';
+  pendingSessionId = null;
+  streamingSessions.clear();
+  syncWakeLock();
   if (socket) {
     socket.disconnect();
     socket = null;
@@ -901,9 +948,12 @@ function renderSessionList(sessions) {
       highlightSession(session.id);
       setMainTab('conversation');
       if (currentSession?.id === session.id) {
+        mainView.classList.remove('no-session');
+        renderSession();
         updateSendButton();
         return;
       }
+      pendingSessionId = session.id;
       showSessionLoading(session);
       if (socket) {
         socket.emit('load_session', session.id);
@@ -1063,6 +1113,12 @@ document.addEventListener('keydown', (e) => {
     closeSessionDetailModal();
   }
   closeSessionContextMenu();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    syncWakeLock();
+  }
 });
 
 chatHeader.addEventListener('click', () => {
