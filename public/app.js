@@ -381,6 +381,17 @@ function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+function isNearMessageBottom() {
+  const distance = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+  return distance < 80;
+}
+
+function scrollToBottomIfNear(wasNearBottom) {
+  if (wasNearBottom) {
+    scrollToBottom();
+  }
+}
+
 // 创建 assistant 气泡的骨架（thinking + toolUse + content 区域）
 function createAssistantSkeleton(msg = null, state = null) {
   const bubble = document.createElement('div');
@@ -586,9 +597,10 @@ function connectSocket() {
     const state = ensureStreamingState(sessionId);
     if (state) state.thinking += chunk;
     if (!isCurrentStreamSession(sessionId) || !thinkingEl) return;
+    const wasNearBottom = isNearMessageBottom();
     const contentEl = thinkingEl.querySelector('.thinking-content');
     contentEl.textContent += chunk;
-    scrollToBottom();
+    scrollToBottomIfNear(wasNearBottom);
   });
 
   socket.on('stream_tool_use', (tool) => {
@@ -598,10 +610,11 @@ function connectSocket() {
     const state = ensureStreamingState(sessionId);
     if (state) state.toolUses.push(cleanTool);
     if (!isCurrentStreamSession(sessionId) || !toolUseEl) return;
+    const wasNearBottom = isNearMessageBottom();
     toolUseEl.style.display = 'block';
     const item = createToolUseItem(cleanTool);
     toolUseEl.appendChild(item);
-    scrollToBottom();
+    scrollToBottomIfNear(wasNearBottom);
   });
 
   socket.on('stream_tool_result', (data) => {
@@ -619,8 +632,9 @@ function connectSocket() {
     resultEl.className = 'tool-result-code';
     resultEl.textContent = data.result || '(no output)';
     if (data.isError) resultEl.classList.add('error');
+    const wasNearBottom = isNearMessageBottom();
     lastItem.appendChild(resultEl);
-    scrollToBottom();
+    scrollToBottomIfNear(wasNearBottom);
   });
 
   socket.on('stream_text', (data) => {
@@ -630,14 +644,16 @@ function connectSocket() {
     const state = ensureStreamingState(sessionId);
     if (state) state.text += text;
     if (!isCurrentStreamSession(sessionId) || !textContentEl) return;
+    const wasNearBottom = isNearMessageBottom();
     textContentEl.style.display = 'block';
     textContentEl.textContent += text;
-    scrollToBottom();
+    scrollToBottomIfNear(wasNearBottom);
   });
 
   socket.on('stream_end', (data) => {
     const sessionId = data?.sessionId || currentSession?.id;
     const content = data?.content || '';
+    const wasNearBottom = isCurrentStreamSession(sessionId) ? isNearMessageBottom() : false;
     // 更新数据
     if (isCurrentStreamSession(sessionId) && currentSession && currentSession.messages.length > 0) {
       const lastMsg = currentSession.messages[currentSession.messages.length - 1];
@@ -653,7 +669,7 @@ function connectSocket() {
     resetStreamingState(sessionId);
     // 最终渲染（Markdown + 保存的 thinking/tool 数据）
     if (isCurrentStreamSession(sessionId)) {
-      renderMessages();
+      renderMessages({ scrollToBottom: wasNearBottom });
     }
     loadSessions();
   });
@@ -661,6 +677,7 @@ function connectSocket() {
   socket.on('stream_error', (error) => {
     const sessionId = error?.sessionId || currentSession?.id;
     const message = (typeof error === 'string' ? error : error?.message) || 'Assistant failed to respond.';
+    const wasNearBottom = isCurrentStreamSession(sessionId) ? isNearMessageBottom() : false;
     if (isCurrentStreamSession(sessionId) && textContentEl) {
       textContentEl.style.display = 'block';
       textContentEl.textContent = message;
@@ -673,7 +690,7 @@ function connectSocket() {
     }
     resetStreamingState(sessionId);
     if (isCurrentStreamSession(sessionId)) {
-      renderMessages();
+      renderMessages({ scrollToBottom: wasNearBottom });
     }
   });
 }
@@ -746,8 +763,9 @@ function showSessionLoading(session) {
   updateSendButton();
 }
 
-function renderMessages() {
+function renderMessages(options = {}) {
   if (!currentSession) return;
+  const shouldScrollToBottom = options.scrollToBottom !== false;
 
   messagesContainer.innerHTML = '';
   clearStreamingDomRefs();
@@ -818,7 +836,9 @@ function renderMessages() {
     createAssistantSkeleton(streamingState.assistantMsg, streamingState);
   }
 
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  if (shouldScrollToBottom) {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
 }
 
 function escapeHtml(text) {
