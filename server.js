@@ -85,6 +85,52 @@ function normalizeSessionTitle(title) {
   return value ? value.slice(0, 80) : 'New Conversation';
 }
 
+function countUserTurns(messages, startIndex, endIndex) {
+  let turns = 0;
+  for (let i = startIndex; i < endIndex; i++) {
+    if (messages[i]?.role === 'user') {
+      turns++;
+    }
+  }
+  return turns;
+}
+
+function getMessagePage(session, options = {}) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const total = messages.length;
+  const before = Number.isInteger(options.before) ? Math.max(0, Math.min(options.before, total)) : total;
+  const turns = Number.isInteger(options.turns) ? Math.max(1, Math.min(options.turns, 50)) : 10;
+  let start = before;
+  let userTurns = 0;
+
+  while (start > 0 && userTurns < turns) {
+    start--;
+    if (messages[start]?.role === 'user') {
+      userTurns++;
+    }
+  }
+
+  return {
+    messages: messages.slice(start, before),
+    page: {
+      start,
+      end: before,
+      total,
+      hasMore: start > 0,
+      loadedTurns: countUserTurns(messages, start, before)
+    }
+  };
+}
+
+function buildSessionPayload(session, options = {}) {
+  const { messages, page } = getMessagePage(session, options);
+  return {
+    ...session,
+    messages,
+    messagePage: page
+  };
+}
+
 function buildCliCommand(provider, session, content, isFirstMessage) {
   if (provider.id === 'codex') {
     const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', '--cd', session.projectDir];
@@ -146,10 +192,26 @@ app.get('/api/sessions/:id', verifyToken, requireAuth, (req, res) => {
   const session = loadSession(req.params.id);
 
   if (session) {
-    res.json(session);
+    res.json(buildSessionPayload(session));
   } else {
     res.status(404).json({ error: 'Session not found' });
   }
+});
+
+app.get('/api/sessions/:id/messages', verifyToken, requireAuth, (req, res) => {
+  const session = loadSession(req.params.id);
+
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  const before = Number.parseInt(req.query.before, 10);
+  const turns = Number.parseInt(req.query.turns, 10);
+  res.json(getMessagePage(session, {
+    before: Number.isFinite(before) ? before : undefined,
+    turns: Number.isFinite(turns) ? turns : undefined
+  }));
 });
 
 app.delete('/api/sessions/:id', verifyToken, requireAuth, (req, res) => {
@@ -172,7 +234,7 @@ app.put('/api/sessions/:id/title', verifyToken, requireAuth, (req, res) => {
     session.customTitle = true;
     session.updatedAt = new Date().toISOString();
     saveSession(session);
-    res.json(session);
+    res.json(buildSessionPayload(session));
   } else {
     res.status(404).json({ error: 'Session not found' });
   }
@@ -229,7 +291,7 @@ io.on('connection', (socket) => {
 
     if (currentSession) {
       socket.emit('session_loaded', {
-        ...currentSession,
+        ...buildSessionPayload(currentSession),
         isStreaming: activeProcesses.has(getProcessKey(socket.id, currentSession.id))
       });
     }

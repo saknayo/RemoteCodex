@@ -1,4 +1,5 @@
 const API_BASE = '/api';
+const MESSAGE_PAGE_TURNS = 10;
 let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
@@ -55,6 +56,9 @@ let wakeLockRequested = false;
 let wakeLockFallbackVideo = null;
 let wakeLockFallbackStream = null;
 let wakeLockFallbackInterval = null;
+let isLoadingOlderMessages = false;
+let olderMessagesLoadArmed = false;
+let olderMessagesTouchY = null;
 
 function getCurrentSessionId() {
   return currentSession?.id || null;
@@ -361,7 +365,7 @@ async function openSessionDetailModal(session) {
     addSessionDetailRow('Assistant', detail.assistantName || detail.provider || 'Claude');
     addSessionDetailRow('Provider', detail.provider || 'claude');
     addSessionDetailRow('Project Directory', detail.projectDir || '');
-    addSessionDetailRow('Messages', String(detail.messages?.length || 0));
+    addSessionDetailRow('Messages', String(detail.messagePage?.total ?? detail.messages?.length ?? 0));
     addSessionDetailRow('Created', formatDetailDate(detail.createdAt));
     addSessionDetailRow('Updated', formatDetailDate(detail.updatedAt));
     sessionDetailModal.style.display = 'flex';
@@ -646,6 +650,10 @@ function connectSocket() {
     if (!isCurrentStreamSession(sessionId)) return;
     if (!currentSession) return;
     currentSession.messages.push(message);
+    if (currentSession.messagePage) {
+      currentSession.messagePage.end++;
+      currentSession.messagePage.total++;
+    }
     // user 消息正常渲染
     if (message.role === 'user') {
       renderMessages();
@@ -930,6 +938,55 @@ async function loadSessions() {
     renderSessionList(sessions);
   } catch (error) {
     console.error('Failed to load sessions:', error);
+  }
+}
+
+function showOlderMessagesLoading() {
+  if (document.getElementById('older-messages-loading')) return;
+  const loader = document.createElement('div');
+  loader.id = 'older-messages-loading';
+  loader.className = 'older-messages-loading';
+  loader.setAttribute('aria-label', 'Loading older messages');
+  const spinner = document.createElement('span');
+  spinner.className = 'older-messages-spinner';
+  loader.appendChild(spinner);
+  messagesContainer.prepend(loader);
+}
+
+function hideOlderMessagesLoading() {
+  document.getElementById('older-messages-loading')?.remove();
+}
+
+async function loadOlderMessages() {
+  if (!currentSession?.id || isLoadingOlderMessages) return;
+  const page = currentSession.messagePage;
+  if (!page?.hasMore) return;
+
+  const sessionId = currentSession.id;
+  isLoadingOlderMessages = true;
+  olderMessagesLoadArmed = false;
+  const previousScrollHeight = messagesContainer.scrollHeight;
+  const previousScrollTop = messagesContainer.scrollTop;
+  showOlderMessagesLoading();
+
+  try {
+    const result = await apiFetch(`${API_BASE}/sessions/${sessionId}/messages?before=${page.start}&turns=${MESSAGE_PAGE_TURNS}`);
+    if (currentSession?.id !== sessionId) return;
+    currentSession.messages = [...result.messages, ...(currentSession.messages || [])];
+    currentSession.messagePage = {
+      ...result.page,
+      end: currentSession.messagePage.end,
+      total: result.page.total,
+      hasMore: result.page.hasMore
+    };
+    renderMessages({ scrollToBottom: false });
+    const heightDelta = messagesContainer.scrollHeight - previousScrollHeight;
+    messagesContainer.scrollTop = previousScrollTop + heightDelta;
+  } catch (error) {
+    console.error('Failed to load older messages:', error);
+    hideOlderMessagesLoading();
+  } finally {
+    isLoadingOlderMessages = false;
   }
 }
 
@@ -1263,6 +1320,39 @@ messageInput.addEventListener('input', () => {
   messageInput.style.height = 'auto';
   messageInput.style.height = messageInput.scrollHeight + 'px';
 });
+
+messagesContainer.addEventListener('scroll', () => {
+  if (olderMessagesLoadArmed && messagesContainer.scrollTop <= 24) {
+    loadOlderMessages();
+  }
+});
+
+messagesContainer.addEventListener('wheel', (e) => {
+  if (e.deltaY < 0) {
+    olderMessagesLoadArmed = true;
+  }
+}, { passive: true });
+
+messagesContainer.addEventListener('touchstart', (e) => {
+  olderMessagesTouchY = e.touches[0]?.clientY ?? null;
+}, { passive: true });
+
+messagesContainer.addEventListener('touchmove', (e) => {
+  if (olderMessagesTouchY === null) return;
+  const currentY = e.touches[0]?.clientY ?? olderMessagesTouchY;
+  if (currentY > olderMessagesTouchY) {
+    olderMessagesLoadArmed = true;
+  }
+  olderMessagesTouchY = currentY;
+}, { passive: true });
+
+messagesContainer.addEventListener('touchend', () => {
+  olderMessagesTouchY = null;
+}, { passive: true });
+
+messagesContainer.addEventListener('touchcancel', () => {
+  olderMessagesTouchY = null;
+}, { passive: true });
 
 if (token) {
   showMainView();

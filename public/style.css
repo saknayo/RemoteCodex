@@ -603,6 +603,23 @@ header {
   font-size: 0.875rem;
 }
 
+.older-messages-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  margin-bottom: var(--spacing-sm);
+}
+
+.older-messages-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 #main-view:not(.no-session) .conversation-empty-state {
   display: none;
 }
