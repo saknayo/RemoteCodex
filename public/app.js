@@ -52,6 +52,9 @@ let selectedSessionForAction = null;
 let actionToastTimer = null;
 let wakeLock = null;
 let wakeLockRequested = false;
+let wakeLockFallbackVideo = null;
+let wakeLockFallbackStream = null;
+let wakeLockFallbackInterval = null;
 
 function getCurrentSessionId() {
   return currentSession?.id || null;
@@ -93,7 +96,11 @@ function updateSendButton() {
 }
 
 async function requestWakeLock() {
-  if (wakeLock || wakeLockRequested || !('wakeLock' in navigator)) return;
+  if (wakeLock || wakeLockRequested) return;
+  if (!('wakeLock' in navigator)) {
+    enableWakeLockFallback();
+    return;
+  }
   wakeLockRequested = true;
   try {
     wakeLock = await navigator.wakeLock.request('screen');
@@ -102,6 +109,7 @@ async function requestWakeLock() {
     });
   } catch (error) {
     console.warn('Wake Lock request failed:', error);
+    enableWakeLockFallback();
   } finally {
     wakeLockRequested = false;
   }
@@ -110,12 +118,14 @@ async function requestWakeLock() {
 async function releaseWakeLock() {
   const lock = wakeLock;
   wakeLock = null;
-  if (!lock) return;
-  try {
-    await lock.release();
-  } catch (error) {
-    console.warn('Wake Lock release failed:', error);
+  if (lock) {
+    try {
+      await lock.release();
+    } catch (error) {
+      console.warn('Wake Lock release failed:', error);
+    }
   }
+  disableWakeLockFallback();
 }
 
 function syncWakeLock() {
@@ -123,6 +133,73 @@ function syncWakeLock() {
     requestWakeLock();
   } else {
     releaseWakeLock();
+  }
+}
+
+function enableWakeLockFallback() {
+  if (wakeLockFallbackVideo) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const context = canvas.getContext('2d');
+  if (!context || typeof canvas.captureStream !== 'function') {
+    console.warn('Wake Lock fallback is not supported by this browser.');
+    return;
+  }
+
+  let tick = 0;
+  const drawFrame = () => {
+    context.fillStyle = tick % 2 === 0 ? '#000' : '#111';
+    context.fillRect(0, 0, 2, 2);
+    tick++;
+  };
+  drawFrame();
+  wakeLockFallbackInterval = setInterval(drawFrame, 1000);
+  wakeLockFallbackStream = canvas.captureStream(1);
+  wakeLockFallbackStream.addEventListener?.('inactive', () => {
+    if (wakeLockFallbackInterval) {
+      clearInterval(wakeLockFallbackInterval);
+      wakeLockFallbackInterval = null;
+    }
+  });
+
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute('muted', '');
+  video.setAttribute('playsinline', '');
+  video.style.position = 'fixed';
+  video.style.width = '1px';
+  video.style.height = '1px';
+  video.style.opacity = '0.01';
+  video.style.pointerEvents = 'none';
+  video.style.left = '0';
+  video.style.bottom = '0';
+  video.srcObject = wakeLockFallbackStream;
+  document.body.appendChild(video);
+  wakeLockFallbackVideo = video;
+
+  video.play().catch((error) => {
+    console.warn('Wake Lock fallback playback failed:', error);
+    disableWakeLockFallback();
+  });
+}
+
+function disableWakeLockFallback() {
+  if (wakeLockFallbackVideo) {
+    wakeLockFallbackVideo.pause();
+    wakeLockFallbackVideo.remove();
+    wakeLockFallbackVideo = null;
+  }
+  if (wakeLockFallbackStream) {
+    for (const track of wakeLockFallbackStream.getTracks()) {
+      track.stop();
+    }
+    wakeLockFallbackStream = null;
+  }
+  if (wakeLockFallbackInterval) {
+    clearInterval(wakeLockFallbackInterval);
+    wakeLockFallbackInterval = null;
   }
 }
 
