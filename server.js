@@ -240,7 +240,7 @@ async function enrichFileChangeTool(tool, projectDir) {
 
   const enrichedChanges = await Promise.all(changes.map(async (change) => ({
     ...change,
-    diff: await collectGitDiffForFile(projectDir, change.path, change.kind)
+    diff: change.diff || await collectGitDiffForFile(projectDir, change.path, change.kind)
   })));
 
   return {
@@ -250,6 +250,17 @@ async function enrichFileChangeTool(tool, projectDir) {
       changes: enrichedChanges
     }
   };
+}
+
+async function enrichMissingFileChangeDiffs(toolUses, projectDir) {
+  for (let index = 0; index < toolUses.length; index++) {
+    const tool = toolUses[index];
+    const isFileChange = tool.name === 'file_change' || tool.input?.type === 'file_change';
+    const hasMissingDiff = Array.isArray(tool.input?.changes) && tool.input.changes.some(change => !change.diff);
+    if (isFileChange && hasMissingDiff) {
+      toolUses[index] = await enrichFileChangeTool(tool, projectDir);
+    }
+  }
 }
 
 function getProcessKey(socketId, targetSessionId) {
@@ -685,6 +696,9 @@ io.on('connection', (socket) => {
           return;
         }
         await Promise.allSettled(streamEventTasks);
+        if (provider.id === 'codex') {
+          await enrichMissingFileChangeDiffs(assistantMsg.toolUses, streamSession.projectDir);
+        }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
