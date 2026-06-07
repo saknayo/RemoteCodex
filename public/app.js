@@ -574,6 +574,34 @@ function connectSocket() {
     return Boolean(sessionId && currentSession?.id === sessionId);
   }
 
+  function upsertCurrentAssistantMessage(sessionId, fields = {}) {
+    if (!isCurrentStreamSession(sessionId) || !currentSession) return;
+    const messages = currentSession.messages || [];
+    let assistantMsg = messages[messages.length - 1];
+    const isNewMessage = assistantMsg?.role !== 'assistant';
+
+    if (isNewMessage) {
+      const state = getStreamingState(sessionId);
+      assistantMsg = {
+        role: 'assistant',
+        content: '',
+        thinking: '',
+        toolUses: [],
+        durationMs: null,
+        assistantName: currentSession.assistantName || 'Claude',
+        timestamp: state?.assistantMsg?.timestamp || new Date().toISOString()
+      };
+      messages.push(assistantMsg);
+      currentSession.messages = messages;
+      if (currentSession.messagePage) {
+        currentSession.messagePage.end++;
+        currentSession.messagePage.total++;
+      }
+    }
+
+    Object.assign(assistantMsg, fields);
+  }
+
   function resetStreamingState(sessionId = getCurrentSessionId(), message = null) {
     if (!sessionId) return;
     if (message && isCurrentStreamSession(sessionId) && textContentEl) {
@@ -739,17 +767,13 @@ function connectSocket() {
     const sessionId = data?.sessionId || currentSession?.id;
     const content = data?.content || '';
     const wasNearBottom = isCurrentStreamSession(sessionId) ? isNearMessageBottom() : false;
-    // 更新数据
-    if (isCurrentStreamSession(sessionId) && currentSession && currentSession.messages.length > 0) {
-      const lastMsg = currentSession.messages[currentSession.messages.length - 1];
-      if (lastMsg.role === 'assistant') {
-        lastMsg.content = content;
-        lastMsg.thinking = data.thinking || '';
-        lastMsg.toolUses = data.toolUses || [];
-        lastMsg.durationMs = data.durationMs ?? null;
-        lastMsg.assistantName = data.assistantName || lastMsg.assistantName || currentSession.assistantName || 'Claude';
-      }
-    }
+    upsertCurrentAssistantMessage(sessionId, {
+      content,
+      thinking: data.thinking || '',
+      toolUses: data.toolUses || [],
+      durationMs: data.durationMs ?? null,
+      assistantName: data.assistantName || currentSession?.assistantName || 'Claude'
+    });
     // 清理流式状态
     resetStreamingState(sessionId);
     // 最终渲染（Markdown + 保存的 thinking/tool 数据）
@@ -767,12 +791,7 @@ function connectSocket() {
       textContentEl.style.display = 'block';
       textContentEl.textContent = message;
     }
-    if (isCurrentStreamSession(sessionId) && currentSession && currentSession.messages.length > 0) {
-      const lastMsg = currentSession.messages[currentSession.messages.length - 1];
-      if (lastMsg.role === 'assistant') {
-        lastMsg.content = message;
-      }
-    }
+    upsertCurrentAssistantMessage(sessionId, { content: message });
     resetStreamingState(sessionId);
     if (isCurrentStreamSession(sessionId)) {
       renderMessages({ scrollToBottom: wasNearBottom });
@@ -917,7 +936,7 @@ function renderMessages(options = {}) {
     messagesContainer.appendChild(bubble);
   }
 
-  if (streamingState?.assistantMsg) {
+  if (streamingState) {
     createAssistantSkeleton(streamingState.assistantMsg, streamingState);
   }
 
