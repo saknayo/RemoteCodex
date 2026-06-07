@@ -135,9 +135,9 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
   if (provider.id === 'codex') {
     const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', '--cd', session.projectDir];
     if (isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
-      return { command: provider.path, args: [...baseArgs, content] };
+      return { command: provider.path, args: [...baseArgs, '-'], stdin: content };
     }
-    return { command: provider.path, args: ['exec', 'resume', '--json', session.cliSessionId, content] };
+    return { command: provider.path, args: ['exec', 'resume', '--json', session.cliSessionId, '-'], stdin: content };
   }
 
   const args = isFirstMessage
@@ -378,13 +378,18 @@ io.on('connection', (socket) => {
 
     try {
       const isFirstMessage = streamSession.messages.filter(m => m.role === 'user').length <= 1;
-      const { command, args } = buildCliCommand(provider, streamSession, content, isFirstMessage);
+      const { command, args, stdin } = buildCliCommand(provider, streamSession, content, isFirstMessage);
       let processFailed = false;
       const cli = spawn(command, args, {
         env: process.env,
         cwd: streamSession.projectDir,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
       });
+
+      if (stdin) {
+        cli.stdin.on('error', () => {});
+        cli.stdin.end(stdin);
+      }
 
       let fullResponse = '';
       let buffer = '';
