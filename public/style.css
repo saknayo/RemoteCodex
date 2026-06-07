@@ -395,6 +395,21 @@ header {
   border-left: 3px solid var(--accent);
 }
 
+.session-running-indicator {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: none;
+  animation: spin 0.8s linear infinite;
+}
+
+.session-item.running .session-running-indicator {
+  display: inline-block;
+}
+
 .session-menu-btn {
   flex: 0 0 36px;
   width: 36px;

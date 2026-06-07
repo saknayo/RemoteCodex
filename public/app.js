@@ -82,6 +82,7 @@ function ensureStreamingState(sessionId, assistantMsg = null) {
       hasThinking: false
     };
     streamingSessions.set(sessionId, state);
+    updateSessionRunningIndicator(sessionId);
     syncWakeLock();
   } else if (assistantMsg) {
     state.assistantMsg = assistantMsg;
@@ -91,6 +92,16 @@ function ensureStreamingState(sessionId, assistantMsg = null) {
 
 function isSessionStreaming(sessionId = getCurrentSessionId()) {
   return Boolean(sessionId && streamingSessions.has(sessionId));
+}
+
+function updateSessionRunningIndicator(sessionId) {
+  if (!sessionId) return;
+  const item = Array.from(sessionList.querySelectorAll('.session-item')).find(sessionItem => sessionItem.dataset.id === sessionId);
+  if (!item) return;
+  const running = isSessionStreaming(sessionId);
+  item.classList.toggle('running', running);
+  item.setAttribute('aria-busy', String(running));
+  item.querySelector('.session-running-indicator')?.setAttribute('aria-hidden', String(!running));
 }
 
 function updateSendButton() {
@@ -634,6 +645,7 @@ function connectSocket() {
       textContentEl.textContent = message;
     }
     streamingSessions.delete(sessionId);
+    updateSessionRunningIndicator(sessionId);
     syncWakeLock();
     if (isCurrentStreamSession(sessionId)) {
       clearStreamingDomRefs();
@@ -661,6 +673,11 @@ function connectSocket() {
       resetStreamingState(currentSession.id, 'Connection lost. Please resend your message.');
     }
     streamingSessions.clear();
+    document.querySelectorAll('.session-item.running').forEach(item => {
+      item.classList.remove('running');
+      item.setAttribute('aria-busy', 'false');
+      item.querySelector('.session-running-indicator')?.setAttribute('aria-hidden', 'true');
+    });
     syncWakeLock();
     updateSendButton();
   });
@@ -1103,9 +1120,11 @@ function renderSessionList(sessions) {
   sessionList.innerHTML = '';
 
   for (const session of sessions) {
+    const running = isSessionStreaming(session.id);
     const li = document.createElement('li');
-    li.className = 'session-item';
+    li.className = `session-item${running ? ' running' : ''}`;
     li.dataset.id = session.id;
+    li.setAttribute('aria-busy', String(running));
 
     const content = document.createElement('div');
     content.className = 'session-item-content';
@@ -1127,8 +1146,14 @@ function renderSessionList(sessions) {
     title.className = 'session-item-title';
     title.textContent = session.title || 'Untitled';
 
+    const runningIndicator = document.createElement('span');
+    runningIndicator.className = 'session-running-indicator';
+    runningIndicator.setAttribute('aria-label', 'Running');
+    runningIndicator.setAttribute('aria-hidden', String(!running));
+
     content.appendChild(date);
     content.appendChild(separator);
+    content.appendChild(runningIndicator);
     content.appendChild(title);
 
     const menuBtn = document.createElement('button');
