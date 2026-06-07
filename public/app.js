@@ -522,7 +522,7 @@ function createAssistantSkeleton(msg = null, state = null) {
 
   // thinking 区域（默认隐藏）
   thinkingEl = document.createElement('div');
-  thinkingEl.className = 'thinking-block collapsed';
+  thinkingEl.className = `thinking-block${state?.thinking ? '' : ' collapsed'}`;
   thinkingEl.innerHTML = '<div class="thinking-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">▶ 思考过程</div><div class="thinking-content"></div>';
   thinkingEl.style.display = state?.thinking ? 'block' : 'none';
   if (state?.thinking) {
@@ -535,7 +535,7 @@ function createAssistantSkeleton(msg = null, state = null) {
   toolUseEl.className = 'tool-use-area';
   toolUseEl.style.display = state?.toolUses?.length ? 'block' : 'none';
   for (const tool of state?.toolUses || []) {
-    toolUseEl.appendChild(createToolUseItem(tool));
+    toolUseEl.appendChild(createToolUseItem(tool, { collapsed: false }));
   }
   body.appendChild(toolUseEl);
 
@@ -553,9 +553,9 @@ function createAssistantSkeleton(msg = null, state = null) {
   streamingBubble = bubble;
 }
 
-function createToolUseItem(tool) {
+function createToolUseItem(tool, options = {}) {
   const item = document.createElement('div');
-  item.className = 'tool-use-item collapsed';
+  item.className = `tool-use-item${options.collapsed === false ? '' : ' collapsed'}`;
 
   const header = document.createElement('div');
   header.className = 'tool-use-header';
@@ -834,7 +834,7 @@ function connectSocket() {
     if (!isCurrentStreamSession(sessionId) || !toolUseEl) return;
     const wasNearBottom = isNearMessageBottom();
     toolUseEl.style.display = 'block';
-    const item = createToolUseItem(cleanTool);
+    const item = createToolUseItem(cleanTool, { collapsed: false });
     toolUseEl.appendChild(item);
     scrollToBottomIfNear(wasNearBottom);
   });
