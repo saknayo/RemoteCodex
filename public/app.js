@@ -233,7 +233,10 @@ function createMessageMeta(senderLabel, timestamp = new Date(), options = {}) {
 
   const time = document.createElement('span');
   time.className = 'message-time';
-  time.textContent = new Date(timestamp).toLocaleTimeString('zh-CN', {
+  time.textContent = new Date(timestamp).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit'
   });
