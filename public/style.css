@@ -733,6 +733,11 @@ header {
   border: 1px solid var(--border);
 }
 
+.stream-waiting-content {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .message-body {
   min-width: 0;
   max-width: 100%;
