@@ -784,6 +784,10 @@ function connectSocket() {
     if (!sessionId || !message) return;
     if (message.role === 'assistant' && isSessionStreaming(sessionId)) {
       ensureStreamingState(sessionId, message);
+      if (isCurrentStreamSession(sessionId)) {
+        renderMessages();
+      }
+      return;
     }
     if (!isCurrentStreamSession(sessionId)) return;
     if (!currentSession) return;
@@ -795,11 +799,6 @@ function connectSocket() {
     // user 消息正常渲染
     if (message.role === 'user') {
       renderMessages();
-    }
-    // assistant 空消息：创建流式骨架
-    if (message.role === 'assistant' && isSessionStreaming(sessionId)) {
-      createAssistantSkeleton(message, getStreamingState(sessionId));
-      hasThinking = false;
     }
   });
 
