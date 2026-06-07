@@ -311,6 +311,14 @@ function createDurationEl(durationMs) {
   return duration;
 }
 
+function createInterruptedEl(interrupted) {
+  if (!interrupted) return null;
+  const marker = document.createElement('div');
+  marker.className = 'message-interrupted';
+  marker.textContent = '已被用户中断';
+  return marker;
+}
+
 function openNewSessionModal() {
   newSessionModal.style.display = 'flex';
   sessionNameInput.focus();
@@ -885,6 +893,7 @@ function connectSocket() {
       thinking: data.thinking || '',
       toolUses: data.toolUses || [],
       durationMs: data.durationMs ?? null,
+      interrupted: Boolean(data.interrupted),
       assistantName: data.assistantName || currentSession?.assistantName || 'Claude'
     });
     // 清理流式状态
@@ -1039,6 +1048,10 @@ function renderMessages(options = {}) {
       body.appendChild(content);
 
       const duration = createDurationEl(msg.durationMs);
+      const interrupted = createInterruptedEl(msg.interrupted);
+      if (interrupted) {
+        body.appendChild(interrupted);
+      }
       if (duration) {
         body.appendChild(duration);
       }

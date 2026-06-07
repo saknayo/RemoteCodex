@@ -756,6 +756,14 @@ header {
   padding: 0 2px;
 }
 
+.message-interrupted {
+  align-self: flex-end;
+  color: var(--error);
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  padding: 0 2px;
+}
+
 /* === Thinking Block === */
 .thinking-block {
   background: var(--bg-surface-elevated);

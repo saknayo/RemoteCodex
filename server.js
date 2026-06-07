@@ -44,6 +44,7 @@ password.initializeDefaultUser();
 
 const activeProcesses = new Map();
 const socketProcesses = new Map();
+const interruptedProcesses = new Set();
 const MAX_FILE_DIFF_CHARS = 20000;
 
 app.use(express.static('public'));
@@ -514,6 +515,7 @@ io.on('connection', (socket) => {
       thinking: '',
       toolUses: [],
       durationMs: null,
+      interrupted: false,
       assistantName: streamSession.assistantName,
       timestamp: new Date().toISOString()
     };
@@ -701,6 +703,7 @@ io.on('connection', (socket) => {
         }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
+        assistantMsg.interrupted = interruptedProcesses.has(processKey);
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
         streamSession.updatedAt = new Date().toISOString();
@@ -712,9 +715,11 @@ io.on('connection', (socket) => {
           thinking: assistantMsg.thinking,
           toolUses: assistantMsg.toolUses,
           durationMs: assistantMsg.durationMs,
+          interrupted: assistantMsg.interrupted,
           assistantName: assistantMsg.assistantName
         });
         activeProcesses.delete(processKey);
+        interruptedProcesses.delete(processKey);
         untrackSocketProcess(socket.id, processKey);
       });
 
@@ -731,6 +736,7 @@ io.on('connection', (socket) => {
     const key = targetSessionId ? getProcessKey(socket.id, targetSessionId) : null;
     const cli = key ? activeProcesses.get(key) : null;
     if (cli) {
+      interruptedProcesses.add(key);
       cli.kill('SIGINT');
     }
   });
@@ -743,6 +749,7 @@ io.on('connection', (socket) => {
         cli.kill();
       }
       activeProcesses.delete(key);
+      interruptedProcesses.delete(key);
     }
     socketProcesses.delete(socket.id);
   });
