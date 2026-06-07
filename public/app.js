@@ -5,6 +5,7 @@ let socket = null;
 let currentSession = null;
 let pendingSessionId = null;
 const streamingSessions = new Map();
+const sessionDrafts = new Map();
 
 // 流式渲染用的 DOM 引用
 let streamingBubble = null;
@@ -97,6 +98,27 @@ function updateSendButton() {
   sendBtn.textContent = streaming ? 'Sending...' : 'Send';
   sendBtn.disabled = streaming;
   interruptBtn.style.display = streaming ? 'inline-block' : 'none';
+}
+
+function resizeMessageInput() {
+  messageInput.style.height = 'auto';
+  messageInput.style.height = messageInput.scrollHeight + 'px';
+}
+
+function saveCurrentSessionDraft() {
+  const sessionId = getCurrentSessionId();
+  if (!sessionId) return;
+  const draft = messageInput.value;
+  if (draft) {
+    sessionDrafts.set(sessionId, draft);
+  } else {
+    sessionDrafts.delete(sessionId);
+  }
+}
+
+function restoreSessionDraft(sessionId = getCurrentSessionId()) {
+  messageInput.value = sessionId ? (sessionDrafts.get(sessionId) || '') : '';
+  resizeMessageInput();
 }
 
 async function requestWakeLock() {
@@ -649,6 +671,7 @@ function connectSocket() {
       ensureStreamingState(session.id);
     }
     currentSession = session;
+    restoreSessionDraft(session.id);
     renderSession();
     highlightSession(session.id);
     setMainTab('conversation');
@@ -658,6 +681,7 @@ function connectSocket() {
   socket.on('session_created', (session) => {
     pendingSessionId = null;
     currentSession = session;
+    restoreSessionDraft(session.id);
     renderSession();
     loadSessions();
     highlightSession(session.id);
@@ -806,6 +830,8 @@ function showLoginView() {
   loginView.style.display = 'flex';
   mainView.style.display = 'none';
   pendingSessionId = null;
+  sessionDrafts.clear();
+  restoreSessionDraft(null);
   streamingSessions.clear();
   syncWakeLock();
   if (socket) {
@@ -828,6 +854,7 @@ function renderSession() {
     mainView.classList.add('no-session');
     sessionTitle.textContent = 'Select or create a session';
     sessionTitle.removeAttribute('title');
+    restoreSessionDraft(null);
     messagesContainer.innerHTML = '';
     const emptyState = document.createElement('div');
     emptyState.id = 'conversation-empty-state';
@@ -852,6 +879,8 @@ function renderSession() {
 
 function showSessionLoading(session) {
   mainView.classList.remove('no-session');
+  messageInput.value = '';
+  resizeMessageInput();
   currentSession = {
     id: session.id,
     title: session.title || 'Untitled',
@@ -1125,10 +1154,12 @@ function renderSessionList(sessions) {
       setMainTab('conversation');
       if (currentSession?.id === session.id) {
         mainView.classList.remove('no-session');
+        restoreSessionDraft(session.id);
         renderSession();
         updateSendButton();
         return;
       }
+      saveCurrentSessionDraft();
       pendingSessionId = session.id;
       showSessionLoading(session);
       if (socket) {
@@ -1216,6 +1247,7 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 });
 
 document.getElementById('new-session-btn').addEventListener('click', () => {
+  saveCurrentSessionDraft();
   openNewSessionModal();
 });
 
@@ -1314,7 +1346,8 @@ sendBtn.addEventListener('click', () => {
   }
 
   messageInput.value = '';
-  messageInput.style.height = 'auto';
+  sessionDrafts.delete(sessionId);
+  resizeMessageInput();
 
   ensureStreamingState(sessionId);
   updateSendButton();
@@ -1339,8 +1372,8 @@ messageInput.addEventListener('keydown', (e) => {
 });
 
 messageInput.addEventListener('input', () => {
-  messageInput.style.height = 'auto';
-  messageInput.style.height = messageInput.scrollHeight + 'px';
+  saveCurrentSessionDraft();
+  resizeMessageInput();
 });
 
 messagesContainer.addEventListener('scroll', () => {
