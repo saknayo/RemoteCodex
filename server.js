@@ -139,7 +139,7 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
     if (isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
       return { command: provider.path, args: [...baseArgs, '-'], stdin: content };
     }
-    return { command: provider.path, args: ['exec', 'resume', '--json', '--skip-git-repo-check', '--cd', session.projectDir, session.cliSessionId, '-'], stdin: content };
+    return { command: provider.path, args: [...baseArgs, 'resume', session.cliSessionId, '-'], stdin: content };
   }
 
   const args = isFirstMessage

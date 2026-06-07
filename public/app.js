@@ -1,6 +1,5 @@
 const API_BASE = '/api';
 const MESSAGE_PAGE_TURNS = 10;
-const STREAM_WAITING_TEXT = '已收到，正在处理...';
 let token = localStorage.getItem('token');
 let socket = null;
 let currentSession = null;
@@ -550,10 +549,8 @@ function createAssistantSkeleton(msg = null, state = null) {
   // 文本内容区域
   textContentEl = document.createElement('div');
   textContentEl.className = 'message-content';
-  textContentEl.textContent = state?.text || STREAM_WAITING_TEXT;
-  if (!state?.text) {
-    textContentEl.classList.add('stream-waiting-content');
-  }
+  textContentEl.textContent = state?.text || '';
+  textContentEl.style.display = state?.text ? 'block' : 'none';
   body.appendChild(textContentEl);
 
   bubble.appendChild(body);
@@ -875,10 +872,6 @@ function connectSocket() {
     if (state) state.text += text;
     if (!isCurrentStreamSession(sessionId) || !textContentEl) return;
     const wasNearBottom = isNearMessageBottom();
-    if (textContentEl.classList.contains('stream-waiting-content')) {
-      textContentEl.textContent = '';
-      textContentEl.classList.remove('stream-waiting-content');
-    }
     textContentEl.style.display = 'block';
     textContentEl.textContent += text;
     scrollToBottomIfNear(wasNearBottom);
