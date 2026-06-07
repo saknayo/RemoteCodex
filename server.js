@@ -44,6 +44,7 @@ password.initializeDefaultUser();
 
 const activeProcesses = new Map();
 const socketProcesses = new Map();
+const MAX_FILE_DIFF_CHARS = 20000;
 
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
@@ -186,6 +187,69 @@ function buildLocalCommandResponse(provider, session, content, isStreaming) {
     'Remote Codex currently supports `/status` for Codex sessions.',
     'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
   ].join('\n');
+}
+
+function isSafeRelativePath(filePath) {
+  if (!filePath || path.isAbsolute(filePath)) return false;
+  const normalized = path.normalize(filePath);
+  return normalized !== '..' && !normalized.startsWith(`..${path.sep}`);
+}
+
+function collectCommandOutput(command, args, cwd, maxChars = MAX_FILE_DIFF_CHARS) {
+  const child = spawn(command, args, {
+    cwd,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+
+  let output = '';
+  child.stdout.on('data', (data) => {
+    if (output.length >= maxChars) return;
+    output += data.toString();
+    if (output.length > maxChars) {
+      output = `${output.slice(0, maxChars)}\n... diff truncated ...`;
+    }
+  });
+
+  return new Promise((resolve) => {
+    child.on('error', () => resolve(''));
+    child.on('close', () => resolve(output));
+  });
+}
+
+async function collectGitDiffForFile(projectDir, filePath, kind = '') {
+  if (!isSafeRelativePath(filePath)) return '';
+
+  const diff = await collectCommandOutput('git', ['diff', '--no-ext-diff', '--', filePath], projectDir);
+  if (diff || kind !== 'add') {
+    return diff;
+  }
+
+  const projectRoot = path.resolve(projectDir);
+  const absolutePath = path.resolve(projectRoot, filePath);
+  if (!absolutePath.startsWith(`${projectRoot}${path.sep}`) || !fs.existsSync(absolutePath)) {
+    return '';
+  }
+
+  return collectCommandOutput('git', ['diff', '--no-index', '--', '/dev/null', filePath], projectDir);
+}
+
+async function enrichFileChangeTool(tool, projectDir) {
+  const changes = Array.isArray(tool.input?.changes) ? tool.input.changes : [];
+  if (!changes.length) return tool;
+
+  const enrichedChanges = await Promise.all(changes.map(async (change) => ({
+    ...change,
+    diff: await collectGitDiffForFile(projectDir, change.path, change.kind)
+  })));
+
+  return {
+    ...tool,
+    input: {
+      ...tool.input,
+      changes: enrichedChanges
+    }
+  };
 }
 
 function getProcessKey(socketId, targetSessionId) {
@@ -469,6 +533,7 @@ io.on('connection', (socket) => {
       let resultDurationMs = null;
       let stderrText = '';
       const codexErrors = [];
+      const streamEventTasks = [];
       const requestStartedAt = Date.now();
 
       cli.stdout.on('data', (data) => {
@@ -480,22 +545,22 @@ io.on('connection', (socket) => {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            handleStreamEvent(event);
+            streamEventTasks.push(handleStreamEvent(event));
           } catch (e) {
             // 非 JSON 行忽略
           }
         }
       });
 
-      function handleStreamEvent(event) {
+      async function handleStreamEvent(event) {
         if (provider.id === 'codex') {
-          handleCodexEvent(event);
+          await handleCodexEvent(event);
           return;
         }
         handleClaudeEvent(event);
       }
 
-      function handleCodexEvent(event) {
+      async function handleCodexEvent(event) {
         if (event.type === 'thread.started' && event.thread_id) {
           streamSession.cliSessionId = event.thread_id;
           streamSession.codexThreadReady = true;
@@ -519,10 +584,13 @@ io.on('connection', (socket) => {
           } else if (item.type === 'error' && item.message) {
             codexErrors.push(item.message);
           } else if (item.type) {
-            const tool = {
+            let tool = {
               name: item.type,
               input: item.command ? { command: item.command } : item
             };
+            if (tool.name === 'file_change' || tool.input?.type === 'file_change') {
+              tool = await enrichFileChangeTool(tool, streamSession.projectDir);
+            }
             assistantMsg.toolUses.push(tool);
             socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
           }
@@ -612,10 +680,11 @@ io.on('connection', (socket) => {
         untrackSocketProcess(socket.id, processKey);
       });
 
-      cli.on('close', (code) => {
+      cli.on('close', async (code) => {
         if (processFailed) {
           return;
         }
+        await Promise.allSettled(streamEventTasks);
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;

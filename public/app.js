@@ -624,9 +624,36 @@ function createFileChangeList(changes) {
     row.appendChild(badge);
     row.appendChild(filePath);
     list.appendChild(row);
+
+    if (change.diff) {
+      list.appendChild(createFileDiff(change.diff));
+    }
   }
 
   return list;
+}
+
+function createFileDiff(diffText) {
+  const diff = document.createElement('pre');
+  diff.className = 'file-change-diff';
+
+  for (const line of diffText.split('\n')) {
+    const lineEl = document.createElement('span');
+    lineEl.className = 'file-change-diff-line';
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      lineEl.classList.add('added');
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      lineEl.classList.add('removed');
+    } else if (line.startsWith('@@')) {
+      lineEl.classList.add('hunk');
+    } else if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+      lineEl.classList.add('meta');
+    }
+    lineEl.textContent = line || ' ';
+    diff.appendChild(lineEl);
+  }
+
+  return diff;
 }
 
 function connectSocket() {

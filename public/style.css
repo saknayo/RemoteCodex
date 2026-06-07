@@ -943,6 +943,46 @@ header {
   overflow-wrap: anywhere;
 }
 
+.file-change-diff {
+  margin: 2px 0 8px;
+  padding: 8px 0;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.file-change-diff-line {
+  display: block;
+  padding: 0 10px;
+  min-width: max-content;
+  color: var(--text-secondary);
+}
+
+.file-change-diff-line.added {
+  color: var(--success);
+  background: rgba(91, 142, 125, 0.1);
+}
+
+.file-change-diff-line.removed {
+  color: var(--error);
+  background: rgba(184, 92, 92, 0.1);
+}
+
+.file-change-diff-line.hunk {
+  color: var(--accent);
+  background: rgba(201, 100, 66, 0.08);
+}
+
+.file-change-diff-line.meta {
+  color: var(--text-muted);
+}
+
 .message-content:hover {
   transform: translateY(-1px);
 }
