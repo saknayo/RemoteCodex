@@ -146,6 +146,48 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
   return { command: provider.path, args };
 }
 
+function buildCodexStatusMessage(session, isStreaming) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const userTurns = messages.filter(message => message.role === 'user').length;
+  const assistantMessages = messages.filter(message => message.role === 'assistant').length;
+  const lastUpdated = session.updatedAt ? new Date(session.updatedAt).toLocaleString('zh-CN') : 'unknown';
+
+  return [
+    '# Codex Status',
+    '',
+    `- Provider: ${session.provider || 'codex'}`,
+    `- Assistant: ${session.assistantName || 'Codex'}`,
+    `- Project directory: ${session.projectDir || process.cwd()}`,
+    `- Codex thread: ${session.codexThreadReady ? 'ready' : 'not initialized'}`,
+    `- Active response: ${isStreaming ? 'yes' : 'no'}`,
+    `- Messages: ${messages.length}`,
+    `- User turns: ${userTurns}`,
+    `- Assistant messages: ${assistantMessages}`,
+    `- Last updated: ${lastUpdated}`,
+    '',
+    'Supported web slash commands: `/status`'
+  ].join('\n');
+}
+
+function buildLocalCommandResponse(provider, session, content, isStreaming) {
+  const trimmed = content.trim();
+  if (provider.id !== 'codex' || !trimmed.startsWith('/')) {
+    return null;
+  }
+
+  const command = trimmed.split(/\s+/, 1)[0].toLowerCase();
+  if (command === '/status') {
+    return buildCodexStatusMessage(session, isStreaming);
+  }
+
+  return [
+    `Unsupported Codex slash command: \`${command}\``,
+    '',
+    'Remote Codex currently supports `/status` for Codex sessions.',
+    'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
+  ].join('\n');
+}
+
 function getProcessKey(socketId, targetSessionId) {
   return `${socketId}:${targetSessionId}`;
 }
@@ -363,6 +405,33 @@ io.on('connection', (socket) => {
     streamSession.updatedAt = new Date().toISOString();
     saveSession(streamSession);
     socket.emit('message_added', { sessionId: streamSession.id, message: userMsg });
+
+    const localResponse = buildLocalCommandResponse(provider, streamSession, content, activeProcesses.has(processKey));
+    if (localResponse) {
+      const assistantMsg = {
+        role: 'assistant',
+        content: localResponse,
+        thinking: '',
+        toolUses: [],
+        durationMs: 0,
+        assistantName: streamSession.assistantName,
+        timestamp: new Date().toISOString()
+      };
+      streamSession.messages.push(assistantMsg);
+      streamSession.updatedAt = new Date().toISOString();
+      saveSession(streamSession);
+      socket.emit('message_added', { sessionId: streamSession.id, message: assistantMsg });
+      socket.emit('stream_end', {
+        sessionId: streamSession.id,
+        code: 0,
+        content: assistantMsg.content,
+        thinking: assistantMsg.thinking,
+        toolUses: assistantMsg.toolUses,
+        durationMs: assistantMsg.durationMs,
+        assistantName: assistantMsg.assistantName
+      });
+      return;
+    }
 
     const assistantMsg = {
       role: 'assistant',
