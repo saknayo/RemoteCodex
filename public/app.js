@@ -559,14 +559,17 @@ function createToolUseItem(tool) {
 
   const header = document.createElement('div');
   header.className = 'tool-use-header';
-  const icon = tool.name === 'Bash' ? '⚡' : '🔧';
-  header.textContent = `${icon} ${tool.name}`;
+  const isFileChange = tool.name === 'file_change' || tool.input?.type === 'file_change';
+  const icon = tool.name === 'Bash' ? '⚡' : (isFileChange ? '▣' : '🔧');
+  header.textContent = `${icon} ${isFileChange ? 'File changes' : tool.name}`;
   header.addEventListener('click', () => {
     item.classList.toggle('collapsed');
   });
   item.appendChild(header);
 
-  if (tool.name === 'Bash' && tool.input.command) {
+  if (isFileChange) {
+    item.appendChild(createFileChangeList(tool.input?.changes || []));
+  } else if (tool.name === 'Bash' && tool.input.command) {
     const code = document.createElement('pre');
     code.className = 'tool-use-code';
     code.textContent = tool.input.command;
@@ -591,6 +594,39 @@ function createToolUseItem(tool) {
   }
 
   return item;
+}
+
+function createFileChangeList(changes) {
+  const list = document.createElement('div');
+  list.className = 'file-change-list';
+
+  if (!changes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'file-change-empty';
+    empty.textContent = 'No file changes reported.';
+    list.appendChild(empty);
+    return list;
+  }
+
+  for (const change of changes) {
+    const row = document.createElement('div');
+    row.className = 'file-change-row';
+
+    const badge = document.createElement('span');
+    const kind = change.kind || 'change';
+    badge.className = `file-change-kind ${kind}`;
+    badge.textContent = kind;
+
+    const filePath = document.createElement('span');
+    filePath.className = 'file-change-path';
+    filePath.textContent = change.path || '(unknown path)';
+
+    row.appendChild(badge);
+    row.appendChild(filePath);
+    list.appendChild(row);
+  }
+
+  return list;
 }
 
 function connectSocket() {
