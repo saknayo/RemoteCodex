@@ -46,6 +46,7 @@ const activeProcesses = new Map();
 const socketProcesses = new Map();
 const interruptedProcesses = new Set();
 const MAX_FILE_DIFF_CHARS = 20000;
+const CODEX_DEPRECATED_HOOKS_WARNING_RE = /\[features\]\.codex_hooks.*\[features\]\.hooks/i;
 
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
@@ -71,6 +72,17 @@ function saveSession(session) {
 
 function getProvider(id = CLI_PROVIDER) {
   return PROVIDERS[id] || PROVIDERS.claude;
+}
+
+function isIgnoredCodexDiagnostic(message) {
+  return CODEX_DEPRECATED_HOOKS_WARNING_RE.test(message || '');
+}
+
+function filterCodexDiagnosticText(text) {
+  return (text || '')
+    .split(/\r?\n/)
+    .filter(line => line.trim() && !isIgnoredCodexDiagnostic(line))
+    .join('\n');
 }
 
 function normalizeProjectDir(projectDir) {
@@ -549,6 +561,13 @@ io.on('connection', (socket) => {
       const streamEventTasks = [];
       const requestStartedAt = Date.now();
 
+      function pushCodexError(message) {
+        if (!message || isIgnoredCodexDiagnostic(message) || codexErrors.includes(message)) {
+          return;
+        }
+        codexErrors.push(message);
+      }
+
       cli.stdout.on('data', (data) => {
         buffer += data.toString();
         const lines = buffer.split('\n');
@@ -580,6 +599,16 @@ io.on('connection', (socket) => {
           return;
         }
 
+        if (event.type === 'error' && event.message) {
+          pushCodexError(event.message);
+          return;
+        }
+
+        if (event.type === 'turn.failed' && event.error?.message) {
+          pushCodexError(event.error.message);
+          return;
+        }
+
         if (event.type === 'item.completed' && event.item) {
           const item = event.item;
           if (item.type === 'agent_message' && item.text) {
@@ -595,7 +624,7 @@ io.on('connection', (socket) => {
             socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
             socket.emit('stream_tool_result', { sessionId: streamSession.id, result: tool.result || '(no output)', isError: item.exit_code !== 0 });
           } else if (item.type === 'error' && item.message) {
-            codexErrors.push(item.message);
+            pushCodexError(item.message);
           } else if (item.type) {
             let tool = {
               name: item.type,
@@ -702,7 +731,7 @@ io.on('connection', (socket) => {
           await enrichMissingFileChangeDiffs(assistantMsg.toolUses, streamSession.projectDir);
         }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
-        const fallbackError = [...codexErrors, stderrText.trim()].filter(Boolean).join('\n');
+        const fallbackError = [...codexErrors, filterCodexDiagnosticText(stderrText)].filter(Boolean).join('\n');
         assistantMsg.interrupted = interruptedProcesses.has(processKey);
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
