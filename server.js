@@ -46,7 +46,14 @@ const activeProcesses = new Map();
 const socketProcesses = new Map();
 const interruptedProcesses = new Set();
 const MAX_FILE_DIFF_CHARS = 20000;
+const MAX_SUBAGENT_TEXT_CHARS = 4000;
 const CODEX_DEPRECATED_HOOKS_WARNING_RE = /\[features\]\.codex_hooks.*\[features\]\.hooks/i;
+const CODEX_EFFORT_VALUES = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
+const CODEX_EFFORT_ALIASES = {
+  min: 'minimal',
+  normal: 'medium',
+  med: 'medium'
+};
 
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
@@ -83,6 +90,18 @@ function filterCodexDiagnosticText(text) {
     .split(/\r?\n/)
     .filter(line => line.trim() && !isIgnoredCodexDiagnostic(line))
     .join('\n');
+}
+
+function truncateToolText(value, maxChars = MAX_SUBAGENT_TEXT_CHARS) {
+  const text = typeof value === 'string' ? value : '';
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n... truncated ...`;
+}
+
+function normalizeCodexEffort(value) {
+  const normalized = (value || '').trim().toLowerCase();
+  const effort = CODEX_EFFORT_ALIASES[normalized] || normalized;
+  return CODEX_EFFORT_VALUES.has(effort) ? effort : null;
 }
 
 function normalizeProjectDir(projectDir) {
@@ -148,6 +167,9 @@ function buildSessionPayload(session, options = {}) {
 function buildCliCommand(provider, session, content, isFirstMessage) {
   if (provider.id === 'codex') {
     const baseArgs = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', '--cd', session.projectDir];
+    if (session.codexEffort) {
+      baseArgs.push('-c', `model_reasoning_effort="${session.codexEffort}"`);
+    }
     if (isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
       return { command: provider.path, args: [...baseArgs, '-'], stdin: content };
     }
@@ -173,13 +195,14 @@ function buildCodexStatusMessage(session, isStreaming) {
     `- Assistant: ${session.assistantName || 'Codex'}`,
     `- Project directory: ${session.projectDir || process.cwd()}`,
     `- Codex thread: ${session.codexThreadReady ? 'ready' : 'not initialized'}`,
+    `- Reasoning effort: ${session.codexEffort || 'default'}`,
     `- Active response: ${isStreaming ? 'yes' : 'no'}`,
     `- Messages: ${messages.length}`,
     `- User turns: ${userTurns}`,
     `- Assistant messages: ${assistantMessages}`,
     `- Last updated: ${lastUpdated}`,
     '',
-    'Supported web slash commands: `/status`'
+    'Supported web slash commands: `/status`, `/effort [minimal|low|medium|high|xhigh]`'
   ].join('\n');
 }
 
@@ -194,12 +217,84 @@ function buildLocalCommandResponse(provider, session, content, isStreaming) {
     return buildCodexStatusMessage(session, isStreaming);
   }
 
+  if (command === '/effort') {
+    const value = trimmed.split(/\s+/)[1];
+    if (!value) {
+      return [
+        '# Codex Effort',
+        '',
+        `Current reasoning effort: ${session.codexEffort || 'default'}`,
+        '',
+        'Usage: `/effort minimal|low|medium|high|xhigh`'
+      ].join('\n');
+    }
+
+    const effort = normalizeCodexEffort(value);
+    if (!effort) {
+      return [
+        `Unsupported Codex effort: \`${value}\``,
+        '',
+        'Supported values: `minimal`, `low`, `medium`, `high`, `xhigh`.'
+      ].join('\n');
+    }
+
+    session.codexEffort = effort;
+    return [
+      '# Codex Effort',
+      '',
+      `Reasoning effort set to: ${effort}`,
+      '',
+      'This setting is stored on the current session and will be applied to subsequent Codex requests.'
+    ].join('\n');
+  }
+
   return [
     `Unsupported Codex slash command: \`${command}\``,
     '',
-    'Remote Codex currently supports `/status` for Codex sessions.',
+    'Remote Codex currently supports `/status` and `/effort [minimal|low|medium|high|xhigh]` for Codex sessions.',
     'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
   ].join('\n');
+}
+
+function buildCodexCollabTool(item) {
+  const agentStates = item.agents_states && typeof item.agents_states === 'object' ? item.agents_states : {};
+  const agents = Object.entries(agentStates).map(([threadId, state]) => ({
+    threadId,
+    status: state?.status || 'unknown',
+    message: truncateToolText(state?.message)
+  }));
+
+  return {
+    id: item.id,
+    name: 'Subagents',
+    input: {
+      type: 'collab_tool_call',
+      action: item.tool || 'agent',
+      status: item.status || 'unknown',
+      prompt: truncateToolText(item.prompt, 2000),
+      receiverThreadIds: Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids : [],
+      agents
+    }
+  };
+}
+
+function upsertToolUse(toolUses, tool) {
+  const index = tool.id ? toolUses.findIndex(existing => existing.id === tool.id) : -1;
+  if (index >= 0) {
+    toolUses[index] = tool;
+    return { tool: toolUses[index], updated: true };
+  }
+  toolUses.push(tool);
+  return { tool, updated: false };
+}
+
+function finalizePendingCodexToolUses(toolUses) {
+  for (const tool of toolUses) {
+    if (tool.name !== 'Subagents' || tool.input?.type !== 'collab_tool_call') continue;
+    if (tool.input.status === 'in_progress') {
+      tool.input.status = 'incomplete';
+    }
+  }
 }
 
 function isSafeRelativePath(filePath) {
@@ -609,6 +704,14 @@ io.on('connection', (socket) => {
           return;
         }
 
+        if ((event.type === 'item.started' || event.type === 'item.completed') && event.item?.type === 'collab_tool_call') {
+          const tool = buildCodexCollabTool(event.item);
+          const { updated } = upsertToolUse(assistantMsg.toolUses, tool);
+          const eventName = updated ? 'stream_tool_update' : 'stream_tool_use';
+          socket.emit(eventName, { sessionId: streamSession.id, ...tool });
+          return;
+        }
+
         if (event.type === 'item.completed' && event.item) {
           const item = event.item;
           if (item.type === 'agent_message' && item.text) {
@@ -728,6 +831,7 @@ io.on('connection', (socket) => {
         }
         await Promise.allSettled(streamEventTasks);
         if (provider.id === 'codex') {
+          finalizePendingCodexToolUses(assistantMsg.toolUses);
           await enrichMissingFileChangeDiffs(assistantMsg.toolUses, streamSession.projectDir);
         }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta

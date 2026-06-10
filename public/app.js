@@ -565,8 +565,10 @@ function createToolUseItem(tool, options = {}) {
   const header = document.createElement('div');
   header.className = 'tool-use-header';
   const isFileChange = tool.name === 'file_change' || tool.input?.type === 'file_change';
-  const icon = tool.name === 'Bash' ? '⚡' : (isFileChange ? '▣' : '🔧');
-  header.textContent = `${icon} ${isFileChange ? 'File changes' : tool.name}`;
+  const isSubagent = tool.name === 'Subagents' || tool.input?.type === 'collab_tool_call';
+  const icon = tool.name === 'Bash' ? '⚡' : (isFileChange ? '▣' : (isSubagent ? '◎' : '🔧'));
+  const label = isFileChange ? 'File changes' : (isSubagent ? createSubagentHeaderText(tool.input) : tool.name);
+  header.textContent = `${icon} ${label}`;
   header.addEventListener('click', () => {
     item.classList.toggle('collapsed');
   });
@@ -574,6 +576,8 @@ function createToolUseItem(tool, options = {}) {
 
   if (isFileChange) {
     item.appendChild(createFileChangeList(tool.input?.changes || []));
+  } else if (isSubagent) {
+    item.appendChild(createSubagentPanel(tool.input || {}));
   } else if (tool.name === 'Bash' && tool.input.command) {
     const code = document.createElement('pre');
     code.className = 'tool-use-code';
@@ -599,6 +603,74 @@ function createToolUseItem(tool, options = {}) {
   }
 
   return item;
+}
+
+function createSubagentHeaderText(input = {}) {
+  const action = input.action || 'agent';
+  const status = input.status || 'unknown';
+  const count = Array.isArray(input.agents) && input.agents.length ? ` · ${input.agents.length}` : '';
+  return `Subagents · ${action} · ${status}${count}`;
+}
+
+function createSubagentPanel(input = {}) {
+  const panel = document.createElement('div');
+  panel.className = 'subagent-panel';
+
+  const summary = document.createElement('div');
+  summary.className = 'subagent-summary';
+  summary.textContent = `Action: ${input.action || 'agent'} · Status: ${input.status || 'unknown'}`;
+  panel.appendChild(summary);
+
+  if (input.prompt) {
+    const prompt = document.createElement('div');
+    prompt.className = 'subagent-prompt';
+    prompt.textContent = input.prompt;
+    panel.appendChild(prompt);
+  }
+
+  const agents = Array.isArray(input.agents) ? input.agents : [];
+  if (!agents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'subagent-empty';
+    empty.textContent = 'Waiting for subagent threads...';
+    panel.appendChild(empty);
+    return panel;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'subagent-list';
+  for (const agent of agents) {
+    const row = document.createElement('div');
+    row.className = 'subagent-row';
+
+    const meta = document.createElement('div');
+    meta.className = 'subagent-meta';
+
+    const status = document.createElement('span');
+    status.className = `subagent-status ${agent.status || 'unknown'}`;
+    status.textContent = agent.status || 'unknown';
+    meta.appendChild(status);
+
+    if (agent.threadId) {
+      const thread = document.createElement('span');
+      thread.className = 'subagent-thread';
+      thread.textContent = `thread ${agent.threadId.slice(-8)}`;
+      meta.appendChild(thread);
+    }
+
+    row.appendChild(meta);
+
+    if (agent.message) {
+      const message = document.createElement('div');
+      message.className = 'subagent-message';
+      message.textContent = agent.message;
+      row.appendChild(message);
+    }
+
+    list.appendChild(row);
+  }
+  panel.appendChild(list);
+  return panel;
 }
 
 function createFileChangeList(changes) {
@@ -841,6 +913,29 @@ function connectSocket() {
     toolUseEl.style.display = 'block';
     const item = createToolUseItem(cleanTool, { collapsed: false });
     toolUseEl.appendChild(item);
+    scrollToBottomIfNear(wasNearBottom);
+  });
+
+  socket.on('stream_tool_update', (tool) => {
+    const sessionId = tool?.sessionId || currentSession?.id;
+    const cleanTool = { ...tool };
+    delete cleanTool.sessionId;
+    const state = ensureStreamingState(sessionId);
+    if (state) {
+      const index = cleanTool.id ? state.toolUses.findIndex(existing => existing.id === cleanTool.id) : -1;
+      if (index >= 0) {
+        state.toolUses[index] = cleanTool;
+      } else {
+        state.toolUses.push(cleanTool);
+      }
+    }
+    if (!isCurrentStreamSession(sessionId) || !toolUseEl || !state) return;
+    const wasNearBottom = isNearMessageBottom();
+    toolUseEl.style.display = 'block';
+    toolUseEl.replaceChildren();
+    for (const itemTool of state.toolUses) {
+      toolUseEl.appendChild(createToolUseItem(itemTool, { collapsed: false }));
+    }
     scrollToBottomIfNear(wasNearBottom);
   });
 

@@ -851,7 +851,8 @@ header {
 
 .tool-use-item.collapsed .tool-use-code,
 .tool-use-item.collapsed .tool-use-path,
-.tool-use-item.collapsed .tool-result-code {
+.tool-use-item.collapsed .tool-result-code,
+.tool-use-item.collapsed .subagent-panel {
   display: none;
 }
 
@@ -895,6 +896,98 @@ header {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.8125rem;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.subagent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.subagent-summary,
+.subagent-empty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.subagent-prompt {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subagent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.subagent-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subagent-status {
+  flex: 0 0 auto;
+  min-width: 72px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.subagent-status.completed {
+  color: var(--success);
+  border-color: rgba(91, 142, 125, 0.35);
+}
+
+.subagent-status.in_progress,
+.subagent-status.pending_init {
+  color: var(--accent);
+  border-color: rgba(201, 100, 66, 0.35);
+}
+
+.subagent-status.failed,
+.subagent-status.incomplete {
+  color: var(--error);
+  border-color: rgba(184, 92, 92, 0.35);
+}
+
+.subagent-thread {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.subagent-message {
+  padding-left: 80px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
