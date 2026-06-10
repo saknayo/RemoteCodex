@@ -116,6 +116,55 @@ function resizeMessageInput() {
   messageInput.style.height = messageInput.scrollHeight + 'px';
 }
 
+function isScrollableElement(el) {
+  return el && el.scrollHeight > el.clientHeight + 1;
+}
+
+function setupScrollBoundaryGuard(el) {
+  if (!el) return;
+  let lastTouchY = null;
+
+  el.addEventListener('touchstart', (e) => {
+    lastTouchY = e.touches[0]?.clientY ?? null;
+  }, { passive: true });
+
+  el.addEventListener('touchmove', (e) => {
+    if (lastTouchY === null || e.touches.length !== 1) return;
+    const currentY = e.touches[0]?.clientY ?? lastTouchY;
+    const deltaY = currentY - lastTouchY;
+    lastTouchY = currentY;
+
+    if (!isScrollableElement(el)) {
+      e.preventDefault();
+      return;
+    }
+
+    const atTop = el.scrollTop <= 0;
+    const atBottom = Math.ceil(el.scrollTop + el.clientHeight) >= el.scrollHeight;
+    if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  el.addEventListener('touchend', () => {
+    lastTouchY = null;
+  }, { passive: true });
+
+  el.addEventListener('touchcancel', () => {
+    lastTouchY = null;
+  }, { passive: true });
+}
+
+function preventOuterTouchScroll() {
+  document.addEventListener('touchmove', (e) => {
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    if (target?.closest('.messages, .session-list, textarea, .modal')) {
+      return;
+    }
+    e.preventDefault();
+  }, { passive: false });
+}
+
 function saveCurrentSessionDraft() {
   const sessionId = getCurrentSessionId();
   if (!sessionId) return;
@@ -1593,6 +1642,9 @@ messagesContainer.addEventListener('touchmove', (e) => {
   const currentY = e.touches[0]?.clientY ?? olderMessagesTouchY;
   if (currentY > olderMessagesTouchY) {
     olderMessagesLoadArmed = true;
+    if (messagesContainer.scrollTop <= 24) {
+      loadOlderMessages();
+    }
   }
   olderMessagesTouchY = currentY;
 }, { passive: true });
@@ -1604,6 +1656,11 @@ messagesContainer.addEventListener('touchend', () => {
 messagesContainer.addEventListener('touchcancel', () => {
   olderMessagesTouchY = null;
 }, { passive: true });
+
+setupScrollBoundaryGuard(messagesContainer);
+setupScrollBoundaryGuard(sessionList);
+setupScrollBoundaryGuard(messageInput);
+preventOuterTouchScroll();
 
 if (token) {
   showMainView();
