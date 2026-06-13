@@ -249,7 +249,7 @@ function getCodexContextUsage(threadId) {
 }
 
 function buildContextUsagePayload(usage) {
-  if (!usage) return null;
+  if (!isValidContextUsage(usage)) return null;
   return {
     contextTokens: usage.contextTokens,
     totalTokens: usage.totalTokens,
@@ -259,6 +259,19 @@ function buildContextUsagePayload(usage) {
   };
 }
 
+function isValidContextUsage(usage) {
+  return Boolean(
+    usage &&
+    Number.isFinite(usage.contextTokens) &&
+    Number.isFinite(usage.contextWindow) &&
+    Number.isFinite(usage.ratio) &&
+    usage.contextTokens >= 0 &&
+    usage.contextWindow > 0 &&
+    usage.ratio >= 0 &&
+    usage.ratio <= 1
+  );
+}
+
 function shouldArchiveCodexContext(session, isFirstMessage) {
   if (session.provider !== 'codex' || isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
     return { shouldArchive: false, usage: null };
@@ -266,8 +279,8 @@ function shouldArchiveCodexContext(session, isFirstMessage) {
 
   const usage = getCodexContextUsage(session.cliSessionId);
   return {
-    shouldArchive: Boolean(usage && usage.ratio >= CODEX_CONTEXT_ARCHIVE_THRESHOLD),
-    usage
+    shouldArchive: Boolean(isValidContextUsage(usage) && usage.ratio >= CODEX_CONTEXT_ARCHIVE_THRESHOLD),
+    usage: isValidContextUsage(usage) ? usage : null
   };
 }
 
@@ -340,6 +353,53 @@ async function archiveCodexContextBeforeRotation(provider, session, usage) {
   return result;
 }
 
+function formatTokenCount(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US') : 'unknown';
+}
+
+function formatUsagePercent(ratio) {
+  return Number.isFinite(Number(ratio)) ? `${Math.round(Number(ratio) * 100)}%` : 'unknown';
+}
+
+function buildCodexContextStatusLines(session) {
+  if (session.provider !== 'codex') {
+    return [];
+  }
+
+  const thresholdPercent = formatUsagePercent(CODEX_CONTEXT_ARCHIVE_THRESHOLD);
+  if (!session.cliSessionId || !session.codexThreadReady) {
+    return [
+      '',
+      'Context usage:',
+      '- Status: unavailable, Codex thread is not initialized',
+      `- Archive threshold: ${thresholdPercent}`
+    ];
+  }
+
+  const usage = getCodexContextUsage(session.cliSessionId);
+  if (!usage) {
+    return [
+      '',
+      'Context usage:',
+      '- Status: unavailable, no Codex token_count event found for this thread',
+      `- Archive threshold: ${thresholdPercent}`
+    ];
+  }
+
+  const valid = isValidContextUsage(usage);
+  return [
+    '',
+    'Context usage:',
+    `- Status: ${valid ? 'valid' : 'ignored, raw ratio is outside 0%-100%'}`,
+    `- Current window tokens: ${formatTokenCount(usage.contextTokens)} / ${formatTokenCount(usage.contextWindow)}`,
+    `- Current window usage: ${valid ? formatUsagePercent(usage.ratio) : 'unknown'}`,
+    `- Raw usage ratio: ${formatUsagePercent(usage.ratio)}`,
+    `- Archive threshold: ${thresholdPercent}`,
+    `- Total thread tokens: ${formatTokenCount(usage.totalTokens)}`,
+    `- Last token event: ${usage.timestamp || 'unknown'}`
+  ];
+}
+
 function buildCodexStatusMessage(session, isStreaming) {
   const messages = Array.isArray(session.messages) ? session.messages : [];
   const userTurns = messages.filter(message => message.role === 'user').length;
@@ -359,6 +419,7 @@ function buildCodexStatusMessage(session, isStreaming) {
     `- User turns: ${userTurns}`,
     `- Assistant messages: ${assistantMessages}`,
     `- Last updated: ${lastUpdated}`,
+    ...buildCodexContextStatusLines(session),
     '',
     'Supported web slash commands: `/status`, `/effort [minimal|low|medium|high|xhigh]`'
   ].join('\n');
@@ -436,21 +497,39 @@ function buildCodexCollabTool(item) {
   };
 }
 
+function applyToolTiming(tool, startedAt, endedAt = null) {
+  const startTime = Date.parse(startedAt);
+  const endTime = endedAt ? Date.parse(endedAt) : NaN;
+  return {
+    ...tool,
+    startedAt,
+    endedAt,
+    durationMs: Number.isFinite(startTime) && Number.isFinite(endTime) ? Math.max(0, endTime - startTime) : null
+  };
+}
+
 function upsertToolUse(toolUses, tool) {
   const index = tool.id ? toolUses.findIndex(existing => existing.id === tool.id) : -1;
   if (index >= 0) {
-    toolUses[index] = tool;
+    toolUses[index] = {
+      ...tool,
+      startedAt: tool.startedAt || toolUses[index].startedAt || null,
+      endedAt: tool.endedAt || toolUses[index].endedAt || null,
+      durationMs: tool.durationMs ?? toolUses[index].durationMs ?? null
+    };
     return { tool: toolUses[index], updated: true };
   }
   toolUses.push(tool);
   return { tool, updated: false };
 }
 
-function finalizePendingCodexToolUses(toolUses) {
+function finalizePendingToolTimings(toolUses, endedAt) {
   for (const tool of toolUses) {
-    if (tool.name !== 'Subagents' || tool.input?.type !== 'collab_tool_call') continue;
-    if (tool.input.status === 'in_progress') {
+    if (tool.name === 'Subagents' && tool.input?.type === 'collab_tool_call' && tool.input.status === 'in_progress') {
       tool.input.status = 'incomplete';
+    }
+    if (tool.startedAt && !tool.endedAt) {
+      Object.assign(tool, applyToolTiming(tool, tool.startedAt, endedAt));
     }
   }
 }
@@ -753,6 +832,7 @@ io.on('connection', (socket) => {
         role: 'assistant',
         content: localResponse,
         thinking: '',
+        thinkingMeta: null,
         toolUses: [],
         durationMs: 0,
         assistantName: streamSession.assistantName,
@@ -767,6 +847,7 @@ io.on('connection', (socket) => {
         code: 0,
         content: assistantMsg.content,
         thinking: assistantMsg.thinking,
+        thinkingMeta: assistantMsg.thinkingMeta,
         toolUses: assistantMsg.toolUses,
         durationMs: assistantMsg.durationMs,
         assistantName: assistantMsg.assistantName
@@ -778,6 +859,7 @@ io.on('connection', (socket) => {
       role: 'assistant',
       content: '',
       thinking: '',
+      thinkingMeta: null,
       toolUses: [],
       durationMs: null,
       interrupted: false,
@@ -831,6 +913,7 @@ io.on('connection', (socket) => {
       let fullResponse = '';
       let buffer = '';
       let thinking = '';
+      let thinkingStartedAt = null;
       let currentTool = null;
       let toolInput = '';
       let resultText = '';
@@ -889,7 +972,13 @@ io.on('connection', (socket) => {
         }
 
         if ((event.type === 'item.started' || event.type === 'item.completed') && event.item?.type === 'collab_tool_call') {
-          const tool = buildCodexCollabTool(event.item);
+          const now = new Date().toISOString();
+          const existing = assistantMsg.toolUses.find(tool => tool.id && tool.id === event.item.id);
+          const tool = applyToolTiming(
+            buildCodexCollabTool(event.item),
+            existing?.startedAt || now,
+            event.type === 'item.completed' ? now : null
+          );
           const { updated } = upsertToolUse(assistantMsg.toolUses, tool);
           const eventName = updated ? 'stream_tool_update' : 'stream_tool_use';
           socket.emit(eventName, { sessionId: streamSession.id, ...tool });
@@ -902,26 +991,28 @@ io.on('connection', (socket) => {
             resultText = item.text;
             fullResponse = item.text;
           } else if (item.type === 'command_execution') {
-            const tool = {
+            const now = new Date().toISOString();
+            const tool = applyToolTiming({
               name: 'Bash',
               input: { command: item.command || '' },
               result: (item.aggregated_output || '').substring(0, 2000)
-            };
+            }, now, now);
             assistantMsg.toolUses.push(tool);
-            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
-            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: tool.result || '(no output)', isError: item.exit_code !== 0 });
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, ...tool });
+            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: tool.result || '(no output)', isError: item.exit_code !== 0, endedAt: tool.endedAt, durationMs: tool.durationMs });
           } else if (item.type === 'error' && item.message) {
             pushCodexError(item.message);
           } else if (item.type) {
-            let tool = {
+            const now = new Date().toISOString();
+            let tool = applyToolTiming({
               name: item.type,
               input: item.command ? { command: item.command } : item
-            };
+            }, now, now);
             if (tool.name === 'file_change' || tool.input?.type === 'file_change') {
               tool = await enrichFileChangeTool(tool, streamSession.projectDir);
             }
             assistantMsg.toolUses.push(tool);
-            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: tool.name, input: tool.input });
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, ...tool });
           }
         }
       }
@@ -945,7 +1036,8 @@ io.on('connection', (socket) => {
           const lastTool = assistantMsg.toolUses[assistantMsg.toolUses.length - 1];
           if (lastTool) {
             lastTool.result = result.substring(0, 2000);
-            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: lastTool.result, isError: tr.is_error });
+            Object.assign(lastTool, applyToolTiming(lastTool, lastTool.startedAt || new Date().toISOString(), new Date().toISOString()));
+            socket.emit('stream_tool_result', { sessionId: streamSession.id, result: lastTool.result, isError: tr.is_error, endedAt: lastTool.endedAt, durationMs: lastTool.durationMs });
           }
           return;
         }
@@ -956,11 +1048,12 @@ io.on('connection', (socket) => {
           const block = evt.content_block;
           if (block.type === 'thinking') {
             thinking = '';
+            thinkingStartedAt = new Date().toISOString();
             console.log('[STREAM] thinking_start');
-            socket.emit('stream_thinking_start', { sessionId: streamSession.id });
+            socket.emit('stream_thinking_start', { sessionId: streamSession.id, startedAt: thinkingStartedAt });
           } else if (block.type === 'tool_use') {
             toolInput = '';
-            currentTool = { id: block.id, name: block.name };
+            currentTool = { id: block.id, name: block.name, startedAt: new Date().toISOString() };
           }
         } else if (evt.type === 'content_block_delta') {
           const delta = evt.delta;
@@ -982,14 +1075,18 @@ io.on('connection', (socket) => {
             } catch (e) {
               input = { raw: toolInput };
             }
-            socket.emit('stream_tool_use', { sessionId: streamSession.id, name: currentTool.name, input });
-            assistantMsg.toolUses.push({ name: currentTool.name, input });
+            const tool = applyToolTiming({ id: currentTool.id, name: currentTool.name, input }, currentTool.startedAt);
+            socket.emit('stream_tool_use', { sessionId: streamSession.id, ...tool });
+            assistantMsg.toolUses.push(tool);
             currentTool = null;
             toolInput = '';
           }
           if (thinking) {
             assistantMsg.thinking = thinking;
+            const thinkingEndedAt = new Date().toISOString();
+            assistantMsg.thinkingMeta = applyToolTiming({}, thinkingStartedAt || thinkingEndedAt, thinkingEndedAt);
             thinking = '';
+            thinkingStartedAt = null;
           }
         }
       }
@@ -1015,8 +1112,10 @@ io.on('connection', (socket) => {
         }
         await Promise.allSettled(streamEventTasks);
         if (provider.id === 'codex') {
-          finalizePendingCodexToolUses(assistantMsg.toolUses);
+          finalizePendingToolTimings(assistantMsg.toolUses, new Date().toISOString());
           await enrichMissingFileChangeDiffs(assistantMsg.toolUses, streamSession.projectDir);
+        } else {
+          finalizePendingToolTimings(assistantMsg.toolUses, new Date().toISOString());
         }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         const fallbackError = [...codexErrors, filterCodexDiagnosticText(stderrText)].filter(Boolean).join('\n');
@@ -1033,6 +1132,7 @@ io.on('connection', (socket) => {
           code,
           content: assistantMsg.content,
           thinking: assistantMsg.thinking,
+          thinkingMeta: assistantMsg.thinkingMeta,
           toolUses: assistantMsg.toolUses,
           durationMs: assistantMsg.durationMs,
           contextUsage: assistantMsg.contextUsage,

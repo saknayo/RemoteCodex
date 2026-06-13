@@ -77,6 +77,7 @@ function ensureStreamingState(sessionId, assistantMsg = null) {
     state = {
       assistantMsg: assistantMsg || null,
       thinking: '',
+      thinkingMeta: null,
       text: '',
       toolUses: [],
       hasThinking: false
@@ -350,6 +351,47 @@ function formatDuration(durationMs) {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+function formatTimeOnly(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
+function createSubmessageHeader(label, meta = {}) {
+  const header = document.createElement('div');
+  header.className = meta.className || '';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'submessage-title';
+  labelEl.textContent = label;
+  header.appendChild(labelEl);
+
+  const parts = [];
+  const startText = formatTimeOnly(meta.startedAt);
+  if (startText) {
+    parts.push(startText);
+  }
+  const durationText = formatDuration(meta.durationMs);
+  if (durationText) {
+    parts.push(durationText);
+  }
+
+  if (parts.length) {
+    const metaEl = document.createElement('span');
+    metaEl.className = 'submessage-meta';
+    metaEl.textContent = parts.join(' · ');
+    header.appendChild(metaEl);
+  }
+
+  return header;
+}
+
 function createMessageFooter(msg) {
   const items = [];
   if (msg.interrupted) {
@@ -357,7 +399,9 @@ function createMessageFooter(msg) {
   }
 
   const percent = Number(msg.contextUsage?.percent);
-  if (Number.isFinite(percent)) {
+  const ratio = Number(msg.contextUsage?.ratio);
+  const hasCurrentUsageShape = Number.isFinite(Number(msg.contextUsage?.contextTokens));
+  if (hasCurrentUsageShape && Number.isFinite(percent) && Number.isFinite(ratio) && ratio >= 0 && ratio <= 1) {
     items.push({ text: `上下文 ${percent}%`, className: 'message-context-usage' });
   }
 
@@ -591,7 +635,16 @@ function createAssistantSkeleton(msg = null, state = null) {
   // thinking 区域（默认隐藏）
   thinkingEl = document.createElement('div');
   thinkingEl.className = `thinking-block${state?.thinking ? '' : ' collapsed'}`;
-  thinkingEl.innerHTML = '<div class="thinking-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">▶ 思考过程</div><div class="thinking-content"></div>';
+  const thinkingHeader = createSubmessageHeader('思考过程', {
+    className: 'thinking-header',
+    startedAt: state?.thinkingMeta?.startedAt,
+    durationMs: state?.thinkingMeta?.durationMs
+  });
+  thinkingHeader.addEventListener('click', () => thinkingEl.classList.toggle('collapsed'));
+  thinkingEl.appendChild(thinkingHeader);
+  const thinkingContent = document.createElement('div');
+  thinkingContent.className = 'thinking-content';
+  thinkingEl.appendChild(thinkingContent);
   thinkingEl.style.display = state?.thinking ? 'block' : 'none';
   if (state?.thinking) {
     thinkingEl.querySelector('.thinking-content').textContent = state.thinking;
@@ -629,7 +682,11 @@ function createToolUseItem(tool, options = {}) {
   const isSubagent = tool.name === 'Subagents' || tool.input?.type === 'collab_tool_call';
   const icon = tool.name === 'Bash' ? '⚡' : (isFileChange ? '▣' : (isSubagent ? '◎' : '🔧'));
   const label = isFileChange ? 'File changes' : (isSubagent ? createSubagentHeaderText(tool.input) : tool.name);
-  header.textContent = `${icon} ${label}`;
+  header.appendChild(createSubmessageHeader(`${icon} ${label}`, {
+    className: 'tool-use-header-inner',
+    startedAt: tool.startedAt,
+    durationMs: tool.durationMs
+  }));
   header.addEventListener('click', () => {
     item.classList.toggle('collapsed');
   });
@@ -826,6 +883,7 @@ function connectSocket() {
         role: 'assistant',
         content: '',
         thinking: '',
+        thinkingMeta: null,
         toolUses: [],
         durationMs: null,
         assistantName: currentSession.assistantName || 'Claude',
@@ -943,10 +1001,21 @@ function connectSocket() {
   socket.on('stream_thinking_start', (data = {}) => {
     const sessionId = data.sessionId || currentSession?.id;
     const state = ensureStreamingState(sessionId);
-    if (state) state.hasThinking = true;
+    if (state) {
+      state.hasThinking = true;
+      state.thinkingMeta = { startedAt: data.startedAt || new Date().toISOString(), durationMs: null };
+    }
     if (!isCurrentStreamSession(sessionId) || !thinkingEl) return;
     thinkingEl.style.display = 'block';
     thinkingEl.classList.remove('collapsed');
+    const header = thinkingEl.querySelector('.thinking-header');
+    const nextHeader = createSubmessageHeader('思考过程', {
+      className: 'thinking-header',
+      startedAt: state?.thinkingMeta?.startedAt,
+      durationMs: state?.thinkingMeta?.durationMs
+    });
+    nextHeader.addEventListener('click', () => thinkingEl.classList.toggle('collapsed'));
+    header?.replaceWith(nextHeader);
     hasThinking = true;
   });
 
@@ -1007,6 +1076,8 @@ function connectSocket() {
       const lastTool = state.toolUses[state.toolUses.length - 1];
       lastTool.result = data.result || '(no output)';
       lastTool.isError = data.isError;
+      lastTool.endedAt = data.endedAt || lastTool.endedAt || null;
+      lastTool.durationMs = data.durationMs ?? lastTool.durationMs ?? null;
     }
     if (!isCurrentStreamSession(sessionId) || !toolUseEl) return;
     const lastItem = toolUseEl.lastElementChild;
@@ -1016,7 +1087,12 @@ function connectSocket() {
     resultEl.textContent = data.result || '(no output)';
     if (data.isError) resultEl.classList.add('error');
     const wasNearBottom = isNearMessageBottom();
-    lastItem.appendChild(resultEl);
+    if (state?.toolUses?.length) {
+      const nextItem = createToolUseItem(state.toolUses[state.toolUses.length - 1], { collapsed: false });
+      lastItem.replaceWith(nextItem);
+    } else {
+      lastItem.appendChild(resultEl);
+    }
     scrollToBottomIfNear(wasNearBottom);
   });
 
@@ -1040,6 +1116,7 @@ function connectSocket() {
     upsertCurrentAssistantMessage(sessionId, {
       content,
       thinking: data.thinking || '',
+      thinkingMeta: data.thinkingMeta || null,
       toolUses: data.toolUses || [],
       durationMs: data.durationMs ?? null,
       contextUsage: data.contextUsage || null,
@@ -1176,7 +1253,17 @@ function renderMessages(options = {}) {
       if (msg.thinking) {
         const thinkBlock = document.createElement('div');
         thinkBlock.className = 'thinking-block collapsed';
-        thinkBlock.innerHTML = `<div class="thinking-header" onclick="this.parentElement.classList.toggle('collapsed')">▶ 思考过程</div><div class="thinking-content">${escapeHtml(msg.thinking)}</div>`;
+        const thinkingHeader = createSubmessageHeader('思考过程', {
+          className: 'thinking-header',
+          startedAt: msg.thinkingMeta?.startedAt,
+          durationMs: msg.thinkingMeta?.durationMs
+        });
+        thinkingHeader.addEventListener('click', () => thinkBlock.classList.toggle('collapsed'));
+        thinkBlock.appendChild(thinkingHeader);
+        const thinkingContent = document.createElement('div');
+        thinkingContent.className = 'thinking-content';
+        thinkingContent.textContent = msg.thinking;
+        thinkBlock.appendChild(thinkingContent);
         body.appendChild(thinkBlock);
       }
 
