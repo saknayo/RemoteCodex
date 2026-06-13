@@ -19,9 +19,11 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
+const CODEX_SESSIONS_DIR = path.join(process.env.HOME || '', '.codex', 'sessions');
 const CLI_PROVIDER = (process.env.CLI_PROVIDER || 'claude').toLowerCase();
 const CLAUDE_CLI_PATH = process.env.CLAUDE_CLI_PATH || process.env.CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/claude';
 const CODEX_CLI_PATH = process.env.CODEX_CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/codex';
+const CODEX_CONTEXT_ARCHIVE_THRESHOLD = Number.parseFloat(process.env.CODEX_CONTEXT_ARCHIVE_THRESHOLD || '0.9');
 
 const PROVIDERS = {
   claude: {
@@ -180,6 +182,162 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
     ? ['-p', content, '--session-id', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
     : ['-p', content, '--resume', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   return { command: provider.path, args };
+}
+
+function findCodexRolloutFile(threadId) {
+  if (!threadId || !fs.existsSync(CODEX_SESSIONS_DIR)) return null;
+  const stack = [CODEX_SESSIONS_DIR];
+  const suffix = `${threadId}.jsonl`;
+
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(suffix)) {
+        return fullPath;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getCodexContextUsage(threadId) {
+  const filePath = findCodexRolloutFile(threadId);
+  if (!filePath) return null;
+
+  let latest = null;
+  const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const payload = record.payload || {};
+    if (payload.type !== 'token_count' || !payload.info) continue;
+    const contextTokens = Number(payload.info.last_token_usage?.total_tokens);
+    const totalTokens = Number(payload.info.total_token_usage?.total_tokens);
+    const contextWindow = Number(payload.info.model_context_window);
+    if (!Number.isFinite(contextTokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) continue;
+
+    latest = {
+      contextTokens,
+      totalTokens,
+      contextWindow,
+      ratio: contextTokens / contextWindow,
+      totalTokenUsage: payload.info.total_token_usage || null,
+      lastTokenUsage: payload.info.last_token_usage || null,
+      rolloutFile: filePath,
+      timestamp: record.timestamp || null
+    };
+  }
+
+  return latest;
+}
+
+function buildContextUsagePayload(usage) {
+  if (!usage) return null;
+  return {
+    contextTokens: usage.contextTokens,
+    totalTokens: usage.totalTokens,
+    contextWindow: usage.contextWindow,
+    ratio: usage.ratio,
+    percent: Math.round(usage.ratio * 100)
+  };
+}
+
+function shouldArchiveCodexContext(session, isFirstMessage) {
+  if (session.provider !== 'codex' || isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
+    return { shouldArchive: false, usage: null };
+  }
+
+  const usage = getCodexContextUsage(session.cliSessionId);
+  return {
+    shouldArchive: Boolean(usage && usage.ratio >= CODEX_CONTEXT_ARCHIVE_THRESHOLD),
+    usage
+  };
+}
+
+function buildCodexArchivePrompt(usage) {
+  const percent = usage ? Math.round(usage.ratio * 100) : 'unknown';
+  return [
+    '请先暂停处理新的用户需求，执行本项目既有的归档机制。',
+    '',
+    `当前 Codex session 上下文使用量已达到 ${percent}%，需要先归档近期对话和当前工作状态，避免后续 compact 丢失目标或上下文。`,
+    '',
+    '要求：',
+    '1. 按项目规则查找并使用项目自己的归档/恢复机制。',
+    '2. 记录当前目标、已完成事项、未完成事项、关键设计决策、验证结果和下一步建议。',
+    '3. 不要新建 RemoteCodex 内部归档文件；只使用项目已有归档机制。',
+    '4. 归档完成后，用一句话说明归档已完成。'
+  ].join('\n');
+}
+
+function runCliCommand(command, args, stdin, cwd) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      env: process.env,
+      cwd,
+      stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    child.on('error', (error) => {
+      resolve({ code: null, stdout, stderr: error.message });
+    });
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+
+    if (stdin) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(stdin);
+    }
+  });
+}
+
+async function archiveCodexContextBeforeRotation(provider, session, usage) {
+  const oldThreadId = session.cliSessionId;
+  const archivePrompt = buildCodexArchivePrompt(usage);
+  const { command, args, stdin } = buildCliCommand(provider, session, archivePrompt, false);
+  const result = await runCliCommand(command, args, stdin, session.projectDir);
+  const now = new Date().toISOString();
+  session.codexThreadHistory = Array.isArray(session.codexThreadHistory) ? session.codexThreadHistory : [];
+  session.codexThreadHistory.push({
+    threadId: oldThreadId,
+    archivedAt: now,
+    reason: 'context_usage_threshold',
+    contextTokens: usage?.contextTokens ?? null,
+    totalTokens: usage?.totalTokens ?? null,
+    contextWindow: usage?.contextWindow ?? null,
+    ratio: usage?.ratio ?? null,
+    archiveExitCode: result.code
+  });
+  session.previousCodexThreadId = oldThreadId;
+  session.cliSessionId = uuidv4();
+  session.codexThreadReady = false;
+  session.updatedAt = now;
+  return result;
 }
 
 function buildCodexStatusMessage(session, isStreaming) {
@@ -631,6 +789,32 @@ io.on('connection', (socket) => {
 
     try {
       const isFirstMessage = streamSession.messages.filter(m => m.role === 'user').length <= 1;
+      if (provider.id === 'codex') {
+        const archiveCheck = shouldArchiveCodexContext(streamSession, isFirstMessage);
+        if (archiveCheck.shouldArchive) {
+          const archiveMsg = {
+            role: 'system',
+            content: `Codex context usage reached ${Math.round(archiveCheck.usage.ratio * 100)}%. 正在归档当前 Codex session，然后会切换到新的 Codex session 继续处理你的消息。`,
+            timestamp: new Date().toISOString()
+          };
+          streamSession.messages.splice(streamSession.messages.length - 1, 0, archiveMsg);
+          streamSession.updatedAt = new Date().toISOString();
+          saveSession(streamSession);
+          socket.emit('message_added', { sessionId: streamSession.id, message: archiveMsg });
+          const archiveResult = await archiveCodexContextBeforeRotation(provider, streamSession, archiveCheck.usage);
+          const systemMsg = {
+            role: 'system',
+            content: archiveResult.code === 0
+              ? `归档完成。已开启新的 Codex session，原 Codex session id 已保存到历史记录。`
+              : `归档命令退出码 ${archiveResult.code ?? 'unknown'}。仍会开启新的 Codex session，原 Codex session id 已保存到历史记录。`,
+            timestamp: new Date().toISOString()
+          };
+          streamSession.messages.splice(streamSession.messages.length - 1, 0, systemMsg);
+          streamSession.updatedAt = new Date().toISOString();
+          saveSession(streamSession);
+          socket.emit('message_added', { sessionId: streamSession.id, message: systemMsg });
+        }
+      }
       const { command, args, stdin } = buildCliCommand(provider, streamSession, content, isFirstMessage);
       let processFailed = false;
       const cli = spawn(command, args, {
@@ -839,6 +1023,9 @@ io.on('connection', (socket) => {
         assistantMsg.interrupted = interruptedProcesses.has(processKey);
         assistantMsg.content = resultText || fullResponse || fallbackError || `Assistant exited with code ${code}`;
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
+        if (provider.id === 'codex') {
+          assistantMsg.contextUsage = buildContextUsagePayload(getCodexContextUsage(streamSession.cliSessionId));
+        }
         streamSession.updatedAt = new Date().toISOString();
         saveSession(streamSession);
         socket.emit('stream_end', {
@@ -848,6 +1035,7 @@ io.on('connection', (socket) => {
           thinking: assistantMsg.thinking,
           toolUses: assistantMsg.toolUses,
           durationMs: assistantMsg.durationMs,
+          contextUsage: assistantMsg.contextUsage,
           interrupted: assistantMsg.interrupted,
           assistantName: assistantMsg.assistantName
         });

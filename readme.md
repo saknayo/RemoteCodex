@@ -70,3 +70,5 @@ remote_codex/
 - Codex 路径：`CODEX_CLI_PATH=/path/to/codex`
 - 旧的 `CLI_PATH` 仍可作为 Claude 路径兼容配置
 - 新建 Session 时可选择 Claude/Codex，输入自定义 Session 名和项目目录；CLI 会在该目录下运行
+- Codex 上下文自动归档阈值：`CODEX_CONTEXT_ARCHIVE_THRESHOLD=0.9`
+- 当 Codex session 达到阈值时，会先向旧 Codex thread 发送归档请求，归档后保存旧 thread id 并开启新的 Codex thread 继续处理用户消息

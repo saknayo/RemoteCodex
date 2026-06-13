@@ -350,21 +350,33 @@ function formatDuration(durationMs) {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-function createDurationEl(durationMs) {
-  const durationText = formatDuration(durationMs);
-  if (!durationText) return null;
-  const duration = document.createElement('div');
-  duration.className = 'message-duration';
-  duration.textContent = `耗时 ${durationText}`;
-  return duration;
-}
+function createMessageFooter(msg) {
+  const items = [];
+  if (msg.interrupted) {
+    items.push({ text: '已被用户中断', className: 'message-interrupted' });
+  }
 
-function createInterruptedEl(interrupted) {
-  if (!interrupted) return null;
-  const marker = document.createElement('div');
-  marker.className = 'message-interrupted';
-  marker.textContent = '已被用户中断';
-  return marker;
+  const percent = Number(msg.contextUsage?.percent);
+  if (Number.isFinite(percent)) {
+    items.push({ text: `上下文 ${percent}%`, className: 'message-context-usage' });
+  }
+
+  const durationText = formatDuration(msg.durationMs);
+  if (durationText) {
+    items.push({ text: `耗时 ${durationText}`, className: 'message-duration' });
+  }
+
+  if (!items.length) return null;
+
+  const footer = document.createElement('div');
+  footer.className = 'message-footer';
+  for (const item of items) {
+    const span = document.createElement('span');
+    span.className = item.className;
+    span.textContent = item.text;
+    footer.appendChild(span);
+  }
+  return footer;
 }
 
 function openNewSessionModal() {
@@ -1030,6 +1042,7 @@ function connectSocket() {
       thinking: data.thinking || '',
       toolUses: data.toolUses || [],
       durationMs: data.durationMs ?? null,
+      contextUsage: data.contextUsage || null,
       interrupted: Boolean(data.interrupted),
       assistantName: data.assistantName || currentSession?.assistantName || 'Claude'
     });
@@ -1184,13 +1197,9 @@ function renderMessages(options = {}) {
       content.innerHTML = marked.parse(msg.content || '');
       body.appendChild(content);
 
-      const duration = createDurationEl(msg.durationMs);
-      const interrupted = createInterruptedEl(msg.interrupted);
-      if (interrupted) {
-        body.appendChild(interrupted);
-      }
-      if (duration) {
-        body.appendChild(duration);
+      const footer = createMessageFooter(msg);
+      if (footer) {
+        body.appendChild(footer);
       }
 
       bubble.appendChild(body);

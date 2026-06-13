@@ -763,20 +763,40 @@ header {
   gap: var(--spacing-sm);
 }
 
-.message-duration {
+.message-footer {
   align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 2px;
+  font-size: 0.6875rem;
+  line-height: 1.2;
+}
+
+.message-footer span + span::before {
+  content: '·';
+  color: var(--text-muted);
+  margin: 0 6px;
+}
+
+.message-duration {
   color: var(--text-muted);
   font-size: 0.6875rem;
   line-height: 1.2;
-  padding: 0 2px;
+}
+
+.message-context-usage {
+  color: var(--info);
+  font-size: 0.6875rem;
+  line-height: 1.2;
 }
 
 .message-interrupted {
-  align-self: flex-end;
   color: var(--error);
   font-size: 0.6875rem;
   line-height: 1.2;
-  padding: 0 2px;
 }
 
 /* === Thinking Block === */
