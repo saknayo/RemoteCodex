@@ -24,6 +24,9 @@ const CLI_PROVIDER = (process.env.CLI_PROVIDER || 'claude').toLowerCase();
 const CLAUDE_CLI_PATH = process.env.CLAUDE_CLI_PATH || process.env.CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/claude';
 const CODEX_CLI_PATH = process.env.CODEX_CLI_PATH || '/root/.nvm/versions/node/v24.14.0/bin/codex';
 const CODEX_CONTEXT_ARCHIVE_THRESHOLD = Number.parseFloat(process.env.CODEX_CONTEXT_ARCHIVE_THRESHOLD || '0.9');
+const CLAUDE_CONTEXT_WINDOW = Number.parseInt(process.env.CLAUDE_CONTEXT_WINDOW || '200000', 10);
+const CLAUDE_CONTEXT_ARCHIVE_THRESHOLD = Number.parseFloat(process.env.CLAUDE_CONTEXT_ARCHIVE_THRESHOLD || '0');
+const ARCHIVE_COMMAND_TIMEOUT_MS = Number.parseInt(process.env.ARCHIVE_COMMAND_TIMEOUT_MS || '600000', 10);
 
 const PROVIDERS = {
   claude: {
@@ -178,7 +181,9 @@ function buildCliCommand(provider, session, content, isFirstMessage) {
     return { command: provider.path, args: [...baseArgs, 'resume', session.cliSessionId, '-'], stdin: content };
   }
 
-  const args = isFirstMessage
+  // isFirstMessage 用 --session-id 创建；归档后会生成新 cliSessionId 且 cliSessionReady=false，需重新用 --session-id
+  const needsNewSession = isFirstMessage || session.cliSessionReady === false || !session.cliSessionId;
+  const args = needsNewSession
     ? ['-p', content, '--session-id', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
     : ['-p', content, '--resume', session.cliSessionId, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   return { command: provider.path, args };
@@ -272,6 +277,45 @@ function isValidContextUsage(usage) {
   );
 }
 
+function getClaudeContextUsage(usage, modelUsage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const input = Number(usage.input_tokens) || 0;
+  const output = Number(usage.output_tokens) || 0;
+  const cacheCreation = Number(usage.cache_creation_input_tokens) || 0;
+  const cacheRead = Number(usage.cache_read_input_tokens) || 0;
+
+  // 优先从 modelUsage 读取真实 context window（不同模型窗口不同，如 glm-5.1[1m] 为 1M）
+  let contextWindow = null;
+  if (modelUsage && typeof modelUsage === 'object') {
+    for (const model of Object.values(modelUsage)) {
+      const window = Number(model?.contextWindow);
+      if (Number.isFinite(window) && window > 0) {
+        contextWindow = window;
+        break;
+      }
+    }
+  }
+  if (!contextWindow && Number.isFinite(CLAUDE_CONTEXT_WINDOW) && CLAUDE_CONTEXT_WINDOW > 0) {
+    contextWindow = CLAUDE_CONTEXT_WINDOW;
+  }
+  if (!contextWindow) contextWindow = 200000;
+
+  // 当前窗口占用 = 提示侧 token（含缓存）+ 生成 token
+  const contextTokens = input + cacheCreation + cacheRead + output;
+  if (!Number.isFinite(contextTokens) || contextTokens < 0) return null;
+  const ratio = contextTokens / contextWindow;
+  return {
+    contextTokens,
+    totalTokens: contextTokens,
+    contextWindow,
+    ratio,
+    totalTokenUsage: { input_tokens: input, output_tokens: output, cache_creation_input_tokens: cacheCreation, cache_read_input_tokens: cacheRead },
+    lastTokenUsage: null,
+    rolloutFile: null,
+    timestamp: null
+  };
+}
+
 function shouldArchiveCodexContext(session, isFirstMessage) {
   if (session.provider !== 'codex' || isFirstMessage || !session.cliSessionId || !session.codexThreadReady) {
     return { shouldArchive: false, usage: null };
@@ -299,7 +343,7 @@ function buildCodexArchivePrompt(usage) {
   ].join('\n');
 }
 
-function runCliCommand(command, args, stdin, cwd) {
+function runCliCommand(command, args, stdin, cwd, timeoutMs = ARCHIVE_COMMAND_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       env: process.env,
@@ -309,6 +353,20 @@ function runCliCommand(command, args, stdin, cwd) {
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let settled = false;
+    const safeTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0;
+    const killTimer = safeTimeoutMs ? setTimeout(() => {
+      timedOut = true;
+      stderr += stderr ? '\n' : '';
+      stderr += `Archive command timed out after ${safeTimeoutMs}ms`;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!settled) child.kill('SIGKILL');
+      }, 5000).unref();
+    }, safeTimeoutMs) : null;
+    killTimer?.unref();
+
     child.stdout.on('data', (data) => {
       stdout += data.toString();
     });
@@ -316,10 +374,16 @@ function runCliCommand(command, args, stdin, cwd) {
       stderr += data.toString();
     });
     child.on('error', (error) => {
-      resolve({ code: null, stdout, stderr: error.message });
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      resolve({ code: null, stdout, stderr: error.message, timedOut });
     });
     child.on('close', (code) => {
-      resolve({ code, stdout, stderr });
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      resolve({ code, stdout, stderr, timedOut });
     });
 
     if (stdin) {
@@ -344,11 +408,68 @@ async function archiveCodexContextBeforeRotation(provider, session, usage) {
     totalTokens: usage?.totalTokens ?? null,
     contextWindow: usage?.contextWindow ?? null,
     ratio: usage?.ratio ?? null,
-    archiveExitCode: result.code
+    archiveExitCode: result.code,
+    archiveTimedOut: Boolean(result.timedOut)
   });
   session.previousCodexThreadId = oldThreadId;
   session.cliSessionId = uuidv4();
   session.codexThreadReady = false;
+  session.updatedAt = now;
+  return result;
+}
+
+function shouldArchiveClaudeContext(session, isFirstMessage) {
+  if (session.provider !== 'claude' || isFirstMessage) {
+    return { shouldArchive: false, usage: null };
+  }
+  if (!Number.isFinite(CLAUDE_CONTEXT_ARCHIVE_THRESHOLD) || CLAUDE_CONTEXT_ARCHIVE_THRESHOLD <= 0) {
+    return { shouldArchive: false, usage: null };
+  }
+
+  const lastAssistant = [...(session.messages || [])].reverse().find(message => message.role === 'assistant');
+  const usage = lastAssistant?.contextUsage;
+  return {
+    shouldArchive: Boolean(isValidContextUsage(usage) && usage.ratio >= CLAUDE_CONTEXT_ARCHIVE_THRESHOLD),
+    usage: isValidContextUsage(usage) ? usage : null
+  };
+}
+
+function buildClaudeArchivePrompt(usage) {
+  const percent = usage ? Math.round(usage.ratio * 100) : 'unknown';
+  return [
+    '请先暂停处理新的用户需求，执行本项目既有的归档机制。',
+    '',
+    `当前 Claude session 上下文使用量已达到 ${percent}%，需要先归档近期对话和当前工作状态，避免后续上下文溢出丢失目标。`,
+    '',
+    '要求：',
+    '1. 按项目规则查找并使用项目自己的归档/恢复机制。',
+    '2. 记录当前目标、已完成事项、未完成事项、关键设计决策、验证结果和下一步建议。',
+    '3. 不要新建 RemoteCodex 内部归档文件；只使用项目已有归档机制。',
+    '4. 归档完成后，用一句话说明归档已完成。'
+  ].join('\n');
+}
+
+async function archiveClaudeContextBeforeRotation(provider, session, usage) {
+  const oldCliSessionId = session.cliSessionId;
+  const archivePrompt = buildClaudeArchivePrompt(usage);
+  // 归档提示发给当前 Claude session（resume 模式），让模型总结当前工作
+  const archiveCmd = buildCliCommand(provider, session, archivePrompt, false);
+  const result = await runCliCommand(archiveCmd.command, archiveCmd.args, archiveCmd.stdin || null, session.projectDir);
+  const now = new Date().toISOString();
+  session.claudeSessionHistory = Array.isArray(session.claudeSessionHistory) ? session.claudeSessionHistory : [];
+  session.claudeSessionHistory.push({
+    cliSessionId: oldCliSessionId,
+    archivedAt: now,
+    reason: 'context_usage_threshold',
+    contextTokens: usage?.contextTokens ?? null,
+    contextWindow: usage?.contextWindow ?? null,
+    ratio: usage?.ratio ?? null,
+    archiveExitCode: result.code,
+    archiveTimedOut: Boolean(result.timedOut)
+  });
+  session.previousCliSessionId = oldCliSessionId;
+  session.cliSessionId = uuidv4();
+  session.cliSessionReady = false;
   session.updatedAt = now;
   return result;
 }
@@ -425,53 +546,111 @@ function buildCodexStatusMessage(session, isStreaming) {
   ].join('\n');
 }
 
+function buildClaudeStatusMessage(session, isStreaming) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const userTurns = messages.filter(message => message.role === 'user').length;
+  const assistantMessages = messages.filter(message => message.role === 'assistant').length;
+  const lastUpdated = session.updatedAt ? new Date(session.updatedAt).toLocaleString('zh-CN') : 'unknown';
+
+  const lines = [
+    '# Claude Status',
+    '',
+    `- Provider: ${session.provider || 'claude'}`,
+    `- Assistant: ${session.assistantName || 'Claude'}`,
+    `- Project directory: ${session.projectDir || process.cwd()}`,
+    `- Active response: ${isStreaming ? 'yes' : 'no'}`,
+    `- Messages: ${messages.length}`,
+    `- User turns: ${userTurns}`,
+    `- Assistant messages: ${assistantMessages}`,
+    `- Last updated: ${lastUpdated}`
+  ];
+
+  // 取最近一条 assistant 消息的上下文用量
+  const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant');
+  const usage = lastAssistant?.contextUsage;
+  const thresholdPercent = formatUsagePercent(CLAUDE_CONTEXT_ARCHIVE_THRESHOLD);
+  const archiveHistory = Array.isArray(session.claudeSessionHistory) ? session.claudeSessionHistory : [];
+  lines.push('', 'Context usage:');
+  if (isValidContextUsage(usage)) {
+    lines.push(
+      `- Current window tokens: ${formatTokenCount(usage.contextTokens)} / ${formatTokenCount(usage.contextWindow)}`,
+      `- Current window usage: ${formatUsagePercent(usage.ratio)}`,
+      `- Archive threshold: ${thresholdPercent}`
+    );
+  } else {
+    lines.push(
+      '- Status: unavailable, no valid usage recorded yet for this session',
+      `- Archive threshold: ${thresholdPercent}`
+    );
+  }
+  lines.push(`- Archive history: ${archiveHistory.length} archived session(s)`);
+  if (session.previousCliSessionId) {
+    lines.push(`- Previous session id: ${session.previousCliSessionId}`);
+  }
+
+  lines.push('', 'Supported web slash commands: `/status`');
+  return lines.join('\n');
+}
+
 function buildLocalCommandResponse(provider, session, content, isStreaming) {
   const trimmed = content.trim();
-  if (provider.id !== 'codex' || !trimmed.startsWith('/')) {
+  if (!trimmed.startsWith('/')) {
     return null;
   }
 
   const command = trimmed.split(/\s+/, 1)[0].toLowerCase();
+
   if (command === '/status') {
-    return buildCodexStatusMessage(session, isStreaming);
+    return provider.id === 'codex'
+      ? buildCodexStatusMessage(session, isStreaming)
+      : buildClaudeStatusMessage(session, isStreaming);
   }
 
-  if (command === '/effort') {
-    const value = trimmed.split(/\s+/)[1];
-    if (!value) {
+  if (provider.id === 'codex') {
+    if (command === '/effort') {
+      const value = trimmed.split(/\s+/)[1];
+      if (!value) {
+        return [
+          '# Codex Effort',
+          '',
+          `Current reasoning effort: ${session.codexEffort || 'default'}`,
+          '',
+          'Usage: `/effort minimal|low|medium|high|xhigh`'
+        ].join('\n');
+      }
+
+      const effort = normalizeCodexEffort(value);
+      if (!effort) {
+        return [
+          `Unsupported Codex effort: \`${value}\``,
+          '',
+          'Supported values: `minimal`, `low`, `medium`, `high`, `xhigh`.'
+        ].join('\n');
+      }
+
+      session.codexEffort = effort;
       return [
         '# Codex Effort',
         '',
-        `Current reasoning effort: ${session.codexEffort || 'default'}`,
+        `Reasoning effort set to: ${effort}`,
         '',
-        'Usage: `/effort minimal|low|medium|high|xhigh`'
+        'This setting is stored on the current session and will be applied to subsequent Codex requests.'
       ].join('\n');
     }
 
-    const effort = normalizeCodexEffort(value);
-    if (!effort) {
-      return [
-        `Unsupported Codex effort: \`${value}\``,
-        '',
-        'Supported values: `minimal`, `low`, `medium`, `high`, `xhigh`.'
-      ].join('\n');
-    }
-
-    session.codexEffort = effort;
     return [
-      '# Codex Effort',
+      `Unsupported Codex slash command: \`${command}\``,
       '',
-      `Reasoning effort set to: ${effort}`,
-      '',
-      'This setting is stored on the current session and will be applied to subsequent Codex requests.'
+      'Remote Codex currently supports `/status` and `/effort [minimal|low|medium|high|xhigh]` for Codex sessions.',
+      'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
     ].join('\n');
   }
 
   return [
-    `Unsupported Codex slash command: \`${command}\``,
+    `Unsupported Claude slash command: \`${command}\``,
     '',
-    'Remote Codex currently supports `/status` and `/effort [minimal|low|medium|high|xhigh]` for Codex sessions.',
-    'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
+    'Remote Codex currently supports `/status` for Claude sessions.',
+    'Other Claude CLI slash commands are not available through the non-interactive `-p` bridge yet.'
   ].join('\n');
 }
 
@@ -605,6 +784,24 @@ async function enrichMissingFileChangeDiffs(toolUses, projectDir) {
     if (isFileChange && hasMissingDiff) {
       toolUses[index] = await enrichFileChangeTool(tool, projectDir);
     }
+  }
+}
+
+const CLAUDE_FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+function getClaudeToolFilePath(tool) {
+  if (!tool.input || typeof tool.input !== 'object') return null;
+  return tool.input.file_path || tool.input.notebook_path || null;
+}
+
+async function enrichClaudeFileDiffs(toolUses, projectDir) {
+  for (let index = 0; index < toolUses.length; index++) {
+    const tool = toolUses[index];
+    if (!CLAUDE_FILE_TOOLS.has(tool.name)) continue;
+    const filePath = getClaudeToolFilePath(tool);
+    if (!filePath) continue;
+    const kind = tool.name === 'Write' ? 'add' : '';
+    tool.diff = await collectGitDiffForFile(projectDir, filePath, kind);
   }
 }
 
@@ -896,6 +1093,31 @@ io.on('connection', (socket) => {
           saveSession(streamSession);
           socket.emit('message_added', { sessionId: streamSession.id, message: systemMsg });
         }
+      } else if (provider.id === 'claude') {
+        const archiveCheck = shouldArchiveClaudeContext(streamSession, isFirstMessage);
+        if (archiveCheck.shouldArchive) {
+          const archiveMsg = {
+            role: 'system',
+            content: `Claude context usage reached ${Math.round(archiveCheck.usage.ratio * 100)}%. 正在归档当前 Claude session，然后会切换到新的 Claude session 继续处理你的消息。`,
+            timestamp: new Date().toISOString()
+          };
+          streamSession.messages.splice(streamSession.messages.length - 1, 0, archiveMsg);
+          streamSession.updatedAt = new Date().toISOString();
+          saveSession(streamSession);
+          socket.emit('message_added', { sessionId: streamSession.id, message: archiveMsg });
+          const archiveResult = await archiveClaudeContextBeforeRotation(provider, streamSession, archiveCheck.usage);
+          const systemMsg = {
+            role: 'system',
+            content: archiveResult.code === 0
+              ? `归档完成。已开启新的 Claude session，原 Claude session id 已保存到历史记录。`
+              : `归档命令退出码 ${archiveResult.code ?? 'unknown'}。仍会开启新的 Claude session，原 Claude session id 已保存到历史记录。`,
+            timestamp: new Date().toISOString()
+          };
+          streamSession.messages.splice(streamSession.messages.length - 1, 0, systemMsg);
+          streamSession.updatedAt = new Date().toISOString();
+          saveSession(streamSession);
+          socket.emit('message_added', { sessionId: streamSession.id, message: systemMsg });
+        }
       }
       const { command, args, stdin } = buildCliCommand(provider, streamSession, content, isFirstMessage);
       let processFailed = false;
@@ -918,6 +1140,8 @@ io.on('connection', (socket) => {
       let toolInput = '';
       let resultText = '';
       let resultDurationMs = null;
+      let claudeUsage = null;
+      let claudeModelUsage = null;
       let stderrText = '';
       const codexErrors = [];
       const streamEventTasks = [];
@@ -1026,6 +1250,12 @@ io.on('connection', (socket) => {
           } else if (typeof event.durationMs === 'number') {
             resultDurationMs = event.durationMs;
           }
+          if (event.usage && typeof event.usage === 'object') {
+            claudeUsage = event.usage;
+          }
+          if (event.modelUsage && typeof event.modelUsage === 'object') {
+            claudeModelUsage = event.modelUsage;
+          }
           return;
         }
         // 捕获工具执行结果
@@ -1116,6 +1346,7 @@ io.on('connection', (socket) => {
           await enrichMissingFileChangeDiffs(assistantMsg.toolUses, streamSession.projectDir);
         } else {
           finalizePendingToolTimings(assistantMsg.toolUses, new Date().toISOString());
+          await enrichClaudeFileDiffs(assistantMsg.toolUses, streamSession.projectDir);
         }
         // 优先用 result 事件的完整文本，否则用累积的 text_delta
         const fallbackError = [...codexErrors, filterCodexDiagnosticText(stderrText)].filter(Boolean).join('\n');
@@ -1124,6 +1355,10 @@ io.on('connection', (socket) => {
         assistantMsg.durationMs = resultDurationMs ?? (Date.now() - requestStartedAt);
         if (provider.id === 'codex') {
           assistantMsg.contextUsage = buildContextUsagePayload(getCodexContextUsage(streamSession.cliSessionId));
+        } else {
+          assistantMsg.contextUsage = buildContextUsagePayload(getClaudeContextUsage(claudeUsage, claudeModelUsage));
+          // 归档后用新 cliSessionId 创建会话，本次成功后置 ready，后续才能 resume
+          streamSession.cliSessionReady = true;
         }
         streamSession.updatedAt = new Date().toISOString();
         saveSession(streamSession);

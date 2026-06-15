@@ -713,6 +713,11 @@ function createToolUseItem(tool, options = {}) {
     item.appendChild(desc);
   }
 
+  // Claude Edit/Write/MultiEdit 等文件工具附加 git diff
+  if (tool.diff) {
+    item.appendChild(createFileDiff(tool.diff));
+  }
+
   if (tool.result) {
     const resultEl = document.createElement('pre');
     resultEl.className = 'tool-result-code';
