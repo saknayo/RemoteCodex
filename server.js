@@ -418,6 +418,38 @@ async function archiveCodexContextBeforeRotation(provider, session, usage) {
   return result;
 }
 
+function rotateCodexSessionForClear(session) {
+  const oldThreadId = session.cliSessionId || null;
+  const oldThreadReady = Boolean(session.codexThreadReady && oldThreadId);
+  const now = new Date().toISOString();
+
+  if (oldThreadReady) {
+    session.codexThreadHistory = Array.isArray(session.codexThreadHistory) ? session.codexThreadHistory : [];
+    session.codexThreadHistory.push({
+      threadId: oldThreadId,
+      archivedAt: now,
+      reason: 'manual_clear',
+      contextTokens: null,
+      totalTokens: null,
+      contextWindow: null,
+      ratio: null,
+      archiveExitCode: null,
+      archiveTimedOut: false
+    });
+    session.previousCodexThreadId = oldThreadId;
+  }
+
+  session.cliSessionId = uuidv4();
+  session.codexThreadReady = false;
+  session.updatedAt = now;
+
+  return {
+    oldThreadId,
+    oldThreadReady,
+    newCliSessionId: session.cliSessionId
+  };
+}
+
 function shouldArchiveClaudeContext(session, isFirstMessage) {
   if (session.provider !== 'claude' || isFirstMessage) {
     return { shouldArchive: false, usage: null };
@@ -472,6 +504,37 @@ async function archiveClaudeContextBeforeRotation(provider, session, usage) {
   session.cliSessionReady = false;
   session.updatedAt = now;
   return result;
+}
+
+function rotateClaudeSessionForClear(session) {
+  const oldCliSessionId = session.cliSessionId || null;
+  const oldSessionReady = Boolean(session.cliSessionReady !== false && oldCliSessionId);
+  const now = new Date().toISOString();
+
+  if (oldSessionReady) {
+    session.claudeSessionHistory = Array.isArray(session.claudeSessionHistory) ? session.claudeSessionHistory : [];
+    session.claudeSessionHistory.push({
+      cliSessionId: oldCliSessionId,
+      archivedAt: now,
+      reason: 'manual_clear',
+      contextTokens: null,
+      contextWindow: null,
+      ratio: null,
+      archiveExitCode: null,
+      archiveTimedOut: false
+    });
+    session.previousCliSessionId = oldCliSessionId;
+  }
+
+  session.cliSessionId = uuidv4();
+  session.cliSessionReady = false;
+  session.updatedAt = now;
+
+  return {
+    oldCliSessionId,
+    oldSessionReady,
+    newCliSessionId: session.cliSessionId
+  };
 }
 
 function formatTokenCount(value) {
@@ -542,7 +605,7 @@ function buildCodexStatusMessage(session, isStreaming) {
     `- Last updated: ${lastUpdated}`,
     ...buildCodexContextStatusLines(session),
     '',
-    'Supported web slash commands: `/status`, `/effort [minimal|low|medium|high|xhigh]`'
+    'Supported web slash commands: `/status`, `/clear`, `/effort [minimal|low|medium|high|xhigh]`'
   ].join('\n');
 }
 
@@ -588,7 +651,7 @@ function buildClaudeStatusMessage(session, isStreaming) {
     lines.push(`- Previous session id: ${session.previousCliSessionId}`);
   }
 
-  lines.push('', 'Supported web slash commands: `/status`');
+  lines.push('', 'Supported web slash commands: `/status`, `/clear`');
   return lines.join('\n');
 }
 
@@ -604,6 +667,34 @@ function buildLocalCommandResponse(provider, session, content, isStreaming) {
     return provider.id === 'codex'
       ? buildCodexStatusMessage(session, isStreaming)
       : buildClaudeStatusMessage(session, isStreaming);
+  }
+
+  if (command === '/clear') {
+    if (provider.id === 'codex') {
+      const result = rotateCodexSessionForClear(session);
+      return [
+        '# Codex Session Cleared',
+        '',
+        'Opened a new Codex session for this Web conversation.',
+        result.oldThreadReady
+          ? 'The previous Codex thread id was saved to this session history.'
+          : 'No initialized Codex thread was active, so only a fresh Codex session was prepared.',
+        '',
+        'Your visible chat history is unchanged. The next message will start a new Codex thread.'
+      ].join('\n');
+    }
+
+    const result = rotateClaudeSessionForClear(session);
+    return [
+      '# Claude Session Cleared',
+      '',
+      'Opened a new Claude CLI session for this Web conversation.',
+      result.oldSessionReady
+        ? 'The previous Claude session id was saved to this session history.'
+        : 'No initialized Claude session was active, so only a fresh Claude session was prepared.',
+      '',
+      'Your visible chat history is unchanged. The next message will start a new Claude CLI session.'
+    ].join('\n');
   }
 
   if (provider.id === 'codex') {
@@ -641,7 +732,7 @@ function buildLocalCommandResponse(provider, session, content, isStreaming) {
     return [
       `Unsupported Codex slash command: \`${command}\``,
       '',
-      'Remote Codex currently supports `/status` and `/effort [minimal|low|medium|high|xhigh]` for Codex sessions.',
+      'Remote Codex currently supports `/status`, `/clear`, and `/effort [minimal|low|medium|high|xhigh]` for Codex sessions.',
       'Other Codex TUI slash commands are not available through the non-interactive `codex exec` bridge yet.'
     ].join('\n');
   }
@@ -649,7 +740,7 @@ function buildLocalCommandResponse(provider, session, content, isStreaming) {
   return [
     `Unsupported Claude slash command: \`${command}\``,
     '',
-    'Remote Codex currently supports `/status` for Claude sessions.',
+    'Remote Codex currently supports `/status` and `/clear` for Claude sessions.',
     'Other Claude CLI slash commands are not available through the non-interactive `-p` bridge yet.'
   ].join('\n');
 }

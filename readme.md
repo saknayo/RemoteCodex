@@ -72,6 +72,8 @@ remote_codex/
 - 新建 Session 时可选择 Claude/Codex，输入自定义 Session 名和项目目录；CLI 会在该目录下运行
 - Codex 上下文自动归档阈值：`CODEX_CONTEXT_ARCHIVE_THRESHOLD=0.9`
 - 当 Codex session 达到阈值时，会先向旧 Codex thread 发送归档请求，归档后保存旧 thread id 并开启新的 Codex thread 继续处理用户消息
+- Web 命令：`/status` 查看状态，`/clear` 在当前 Web 会话下开启新的 CLI session/thread 且保留可见聊天历史
+- Codex 专用命令：`/effort minimal|low|medium|high|xhigh` 调整推理强度
 - Claude 上下文使用率会从 Claude CLI 的 usage/modelUsage 事件估算并展示；`CLAUDE_CONTEXT_WINDOW` 仅在 CLI 未返回窗口大小时作为 fallback
 - Claude 自动归档默认关闭：`CLAUDE_CONTEXT_ARCHIVE_THRESHOLD=0`；如需启用可设为 `0.9`
 - 归档命令默认 10 分钟超时：`ARCHIVE_COMMAND_TIMEOUT_MS=600000`，避免归档卡住后阻塞后续消息发送
